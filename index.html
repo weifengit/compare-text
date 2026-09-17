@@ -34,15 +34,16 @@
 
     <div class="sb-title">忽略选项</div>
     <div role="group" aria-label="忽略选项">
-      <label class="chip" title="比较时忽略大小写"><input type="checkbox" id="optIgnoreCase">忽略大小写</label>
+      <label class="chip" title="比较时忽略大小写"><input type="checkbox" id="optIgnoreCase" checked>忽略大小写</label>
       <label class="chip" title="统一 CRLF / LF 行结束符"><input type="checkbox" id="optIgnoreEol" checked>忽略CRLF/LF</label>
-      <label class="chip" title="忽略空k、Tab 等所有空白（含行内空格）"><input type="checkbox" id="optIgnoreWhitespace">忽略空格</label>
-      <label class="chip" title="像处理段落一样忽略换行位置差异"><input type="checkbox" id="optIgnoreNewline">忽略换行</label>
-      <label class="chip" title="全角括号、冒号等视为与半角相同"><input type="checkbox" id="optIgnoreWidth">忽略全/半角</label>
-      <label class="chip" title="忽略括号、引号、逗号、句号、分号、百分号等标点差异"><input type="checkbox" id="optIgnorePunct">忽略标点</label>
+      <label class="chip" title="忽略空k、Tab 等所有空白（含行内空格）"><input type="checkbox" id="optIgnoreWhitespace" checked>忽略空格</label>
+      <label class="chip" title="像处理段落一样忽略换行位置差异"><input type="checkbox" id="optIgnoreNewline" checked>忽略换行</label>
+      <label class="chip" title="全角括号、冒号等视为与半角相同"><input type="checkbox" id="optIgnoreWidth" checked>忽略全/半角</label>
+      <label class="chip" title="忽略括号、引号、逗号、句号、分号、百分号等标点差异"><input type="checkbox" id="optIgnorePunct" checked>忽略标点</label>
     </div>
 
-    <button id="historyBtn" class="btn" title="查看最近对比记录，可恢复/删除">历史记录 ▾</button>
+    <div class="sb-title">历史记录</div>
+    <div class="history-list" id="historyList"></div>
   </aside>
 
   <main class="main">
@@ -89,8 +90,6 @@
   </main>
 </div>
 </div>
-
-<div id="historyPanel" class="history-panel hidden"></div>
 
 <script src="lib/pdf.min.js"></script>
 <script src="lib/codemirror.min.js"></script>

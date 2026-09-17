@@ -115,3 +115,20 @@ node serve.js          # 启动后打开 http://localhost:3000
 历史记录：请直接显示在左侧边栏中，不需要点击“历史记录”才显示出来，直接显示在左侧边栏（历史记录这些字后面，而不是显示在右上角）即可
 在选中了子文件夹之后，原始文件和修改文件会默认填充好一些文件，此时在各个主区域中均没有实际渲染出来，导致我一定需要去修改对应的文件之后才能渲染，每个都是要重新选择，但我建议在你选中了子文件夹之后，默认填充了原始文件和修改文件之后，就直接根据这些内容渲染出主区域
 忽略选项：默认全选中
+
+1. Tab 栏美化 + ＋内联 — tabs.js:50 每次渲染把 ＋ 重挂到最后一个标签之后；styles.css 中 .tab 改为浏览器式方格（min-width:115px、白底 active 与下方相接、:nth 无下边框），.tab-add 与标签同高。
+
+2. PDF 区高度不限制 — 根因 .pdf-panel{height:360px} 已删。.layout/.pdfarea/.pdf-panels/.pdf-panel 改为 flex 弹性链（grid-template-rows:minmax(0,1fr)），隐藏编辑区/缩短区域1后 PDF 区自动撑满。
+
+3. 区域1 左右列协同滚动 — 根因是 renderFlow 的两个 .grid-body 无 id。已给 app.js renderFlow 加 id="leftBody"/"rightBody"（skipped 分支加 inline-body），currentScrollers() 即刻生效，与区域2/3 联动。
+
+4. PDF 禁止选字 + 差异标注 — .pdf-panel{user-select:none}；pdfview.js 新增 collectItems（全局行计数器与 collectText 完全一致，保证行号对齐）、paintInto（vp.transform 换算文本基线坐标涂色）、applyHighlights、setHighlight/getHighlight/isLoaded；app.js updatePdfAnnotations 在每次渲染结果后把 diff 行喂给 PDF（grid 直接用结果行，flow 下按当前忽略选项补一次行级 diff，仅当 PDF 已加载）。.pdf-hl.rm/ad/ch 红/绿/琥珀背景。
+
+5. 历史记录内联侧边栏 — 删除了"历史记录"按钮与右上角弹层，直接渲染到侧边栏 index.html:45 的 #historyList，随每次对比刷新；恢复/删除/清空逻辑保留。窄栏下时间缩写为 MM-DD HH:MM、摘要换行显示。
+
+6. 选子文件夹立即渲染 — filterbar.js loadDir 默认成对填充（原始=第一个、修改=第二个文件）并新增 onDirChange（仅用户手动切换触发）；app.js onDirChange 加载当前 L/R 文件；loadSrcPath 也 .then(onDirChange)。顺手修了 loadFileToSide 令牌：改每侧 fileSeq 计数 + switchSeq 快照，L/R 并行加载不再互相作废，tab 切换仍可作废。
+
+7. 忽略选项默认全选中 — 6 个复选框全部 checked（index.html），newTabState 六项全 true。
+
+PDF的4种视图切换之后，渲染的PDF变成了空白的，看不到内容
+协同滚动（包括左右与上下）会受到【显示编辑区、展开相同行、修整】按钮的影响，请修复

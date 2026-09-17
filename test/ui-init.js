@@ -25,6 +25,7 @@ function mkClassList(seed) {
 function mkEl(id) {
   var el = {
     id: id, checked: false, textContent: '', value: '', style: {},
+    scrollTop: 0, scrollHeight: 0, clientHeight: 0,   // 供协同滚动用例
     classList: mkClassList(),
     children: [],
     _listeners: {},
@@ -77,7 +78,11 @@ var sandbox = {
   },
   fetch: function () {
     return Promise.resolve({
-      json: function () { return Promise.resolve({ ok: true, dirs: [], files: [] }); },
+      json: function () {
+        return Promise.resolve({ ok: true, dirs: ['子文件夹1'], files: [
+          { name: 'a.txt', size: 3, ext: 'txt' }, { name: 'b.txt', size: 3, ext: 'txt' }
+        ] });
+      },
       text: function () { return Promise.resolve('非PDF文件文本'); }
     });
   },
@@ -114,6 +119,19 @@ check('grid 结果渲染不抛错', function () {
   var res = Compute.computeDiff({ left: 'a\nb\nc', right: 'a\nX\nc' });
   res._options = { ignoreCase: false, ignoreEol: true };
   workers[0].onmessage({ data: { id: 1, result: res } });
+});
+check('PDF 标注：grid 结果把变更行映射到两侧行号', function () {
+  var res = Compute.computeDiff({ left: 'a\nb\nc', right: 'a\nX\nc' });
+  res._options = { ignoreCase: false, ignoreEol: true };
+  editors[0].setValue('a\nb\nc');   // 编辑器非空，跳过占位符分支，真正进入渲染
+  editors[1].setValue('a\nX\nc');
+  var id = posted[posted.length - 1].id;
+  workers[0].onmessage({ data: { id: id, result: res } });
+  var Pdf = sandbox.PdfView;
+  if (!Pdf || !Pdf.getHighlight) throw new Error('PdfView 应暴露 getHighlight');
+  var mL = Pdf.getHighlight('L'), mR = Pdf.getHighlight('R');
+  if (mL[2] !== 'ch') throw new Error('左侧第 2 行应为 ch，实际 ' + JSON.stringify(mL));
+  if (mR[2] !== 'ch') throw new Error('右侧第 2 行应为 ch');
 });
 check('flow 结果渲染不抛错且含行号列', function () {
   var res = Compute.computeDiff({ left: '一\n二', right: '一 二', options: { ignoreNewline: true } });
@@ -337,8 +355,48 @@ setTimeout(function () {
           failed++;
           console.log('FAIL  文件选择立即响应\n      ' + e2.message);
         }
-        console.log('\n' + passed + ' passed, ' + failed + ' failed');
-        process.exit(failed ? 1 : 0);
+        // 选中子文件夹 → 默认填充 原始=第一个 / 修改=第二个 文件并自动渲染主区域
+        els['fileSelL'].value = '';
+        els['fileSelR'].value = '';
+        els['dirSel'].value = '/tmp/对比源/子文件夹1';
+        els['dirSel'].dispatch('change');
+        setTimeout(function () {
+          try {
+            if (els['fileSelL'].value !== '/tmp/对比源/子文件夹1/a.txt' ||
+                els['fileSelR'].value !== '/tmp/对比源/子文件夹1/b.txt') {
+              throw new Error('原始/修改文件应默认成对填充，实际 L=' + els['fileSelL'].value + ' R=' + els['fileSelR'].value);
+            }
+            if (editors[0].getValue() !== '非PDF文件文本' || editors[1].getValue() !== '非PDF文件文本') {
+              throw new Error('选中子文件夹后两侧应自动渲染，实际 L=' + JSON.stringify(editors[0].getValue())
+                + ' R=' + JSON.stringify(editors[1].getValue()));
+            }
+            passed++;
+            console.log('  ok  子文件夹：默认填充原始/修改文件并立即渲染');
+          } catch (e3) {
+            failed++;
+            console.log('FAIL  子文件夹自动渲染\n      ' + e3.message);
+          }
+          // 主区域1 左右列协同滚动（flow 视图 leftBody/rightBody）
+          var lb = els['leftBody'], rb = els['rightBody'];
+          lb.scrollHeight = 200; lb.clientHeight = 100; lb.scrollTop = 0;
+          rb.scrollHeight = 200; rb.clientHeight = 100; rb.scrollTop = 0;
+          lb.scrollTop = 50;
+          lb.dispatch('scroll');
+          setTimeout(function () {
+            try {
+              if (Math.abs(rb.scrollTop - 50) > 0.5) {
+                throw new Error('右列应同步到 50，实际 ' + rb.scrollTop);
+              }
+              passed++;
+              console.log('  ok  协同滚动：区域1 左列滚动带动右列');
+            } catch (e4) {
+              failed++;
+              console.log('FAIL  区域1 协同滚动\n      ' + e4.message);
+            }
+            console.log('\n' + passed + ' passed, ' + failed + ' failed');
+            process.exit(failed ? 1 : 0);
+          }, 40);
+        }, 40);
       }, 0);
     }, 600);
   } catch (e) {

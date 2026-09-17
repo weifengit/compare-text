@@ -16,8 +16,7 @@
   var resizeBar = $('resultsResize');
   var layoutEl = $('layout');
   var vsplitEl = $('vsplit');
-  var historyBtn = $('historyBtn');
-  var historyPanel = $('historyPanel');
+  var historyList = $('historyList');
   var sidebarEl = $('sidebar');
   var sidebarToggle = $('sidebarToggle');
   var appEl = $('appRoot');
@@ -222,6 +221,7 @@
       '<div class="grid-body" id="rightBody">' + rightBody + '</div>' +
       '</div>';
     reportStats(res);
+    rebindScrollSync();   // 重渲染重建了 leftBody/rightBody，必须重新绑定协同滚动
   }
 
   /** 流水视图：按原文实际行拆行（保留行号），每行一段高亮片段 */
@@ -263,7 +263,7 @@
 
   function renderFlow(res) {
     if (res.skipped) {
-      results.innerHTML = '<div class="inline-body" style="padding:20px;color:#666">'
+      results.innerHTML = '<div class="inline-body" id="inline-body" style="padding:20px;color:#666">'
         + '文本过大，忽略换行模式暂无法逐字符对比（' + res.leftLen + ' / ' + res.rightLen + ' 字符）。'
         + '可关闭“忽略换行”后重试。</div>';
       reportStats(null);
@@ -273,10 +273,11 @@
       '<div class="grid">' +
       '<div class="colhead">原文（忽略换行）<em>按原行号标注</em></div>' +
       '<div class="colhead">修改后（忽略换行）<em>按原行号标注</em></div>' +
-      '<div class="grid-body">' + flowRowsHtml(flowLineRows(res.segsL)) + '</div>' +
-      '<div class="grid-body">' + flowRowsHtml(flowLineRows(res.segsR)) + '</div>' +
+      '<div class="grid-body" id="leftBody">' + flowRowsHtml(flowLineRows(res.segsL)) + '</div>' +
+      '<div class="grid-body" id="rightBody">' + flowRowsHtml(flowLineRows(res.segsR)) + '</div>' +
       '</div>';
     reportStats({ mode: 'flow', addedChars: res.addedChars, removedChars: res.removedChars });
+    rebindScrollSync();   // 同上：重建了左右栏后重新绑定协同滚动
   }
 
   function renderResult(res) {
@@ -284,17 +285,60 @@
     if (!lastCompareIsRestore) saveHistoryEntry();
     lastCompareIsRestore = false;
     setBusy(false);
-    if (res.error) { results.innerHTML = ''; reportStats(null); rebindScrollSync(); return; }
+    renderHistory();                       // 侧边栏历史随每次对比刷新
+    if (res.error) { results.innerHTML = ''; reportStats(null); updatePdfAnnotations(null); rebindScrollSync(); return; }
     if (editorL.getValue() === '' && editorR.getValue() === '') {
       results.innerHTML = '<div class="placeholder">在两侧粘贴文本，即可自动开始对比</div>';
       statsEl.innerHTML = '';
       statusEl.textContent = '在两侧粘贴文本即可自动对比';
+      updatePdfAnnotations(null);
       rebindScrollSync();
       return;
     }
     if (res.mode === 'flow') renderFlow(res);
     else renderGrid(res);
+    updatePdfAnnotations(res);
     rebindScrollSync();
+  }
+
+  /** 把 diff 结果的行级差异标注到 PDF 面板（grid 直接用结果行；flow 补一次行级 diff） */
+  function updatePdfAnnotations(res) {
+    var mapL = {}, mapR = {};
+    if (res && !res.error && res.mode === 'grid') {
+      for (var i = 0; i < res.rows.length; i++) {
+        var r = res.rows[i];
+        if (r.type === 'change') {
+          if (r.li >= 0) mapL[r.li + 1] = 'ch';
+          if (r.ri >= 0) mapR[r.ri + 1] = 'ch';
+        } else if (r.type === 'remove') {
+          if (r.li >= 0) mapL[r.li + 1] = 'rm';
+        } else if (r.type === 'add') {
+          if (r.ri >= 0) mapR[r.ri + 1] = 'ad';
+        }
+      }
+    } else if (res && !res.error && res.mode === 'flow') {
+      // 忽略换行默认开后仍按真实行差异标注（仅当有 PDF 已加载才补算）
+      if ((PdfView.isLoaded && PdfView.isLoaded('L')) || (PdfView.isLoaded && PdfView.isLoaded('R'))) {
+        var opts = readOptions();           // 与当前忽略选项一致，但关闭忽略换行改用行级 diff
+        opts.ignoreNewline = false;
+        var g = Compute.computeDiff({ left: editorL.getValue(), right: editorR.getValue(), options: opts });
+        if (g && g.mode === 'grid') {
+          for (var j = 0; j < g.rows.length; j++) {
+            var r2 = g.rows[j];
+            if (r2.type === 'change') {
+              if (r2.li >= 0) mapL[r2.li + 1] = 'ch';
+              if (r2.ri >= 0) mapR[r2.ri + 1] = 'ch';
+            } else if (r2.type === 'remove') {
+              if (r2.li >= 0) mapL[r2.li + 1] = 'rm';
+            } else if (r2.type === 'add') {
+              if (r2.ri >= 0) mapR[r2.ri + 1] = 'ad';
+            }
+          }
+        }
+      }
+    }
+    if (PdfView.setHighlight) PdfView.setHighlight('L', mapL);
+    if (PdfView.setHighlight) PdfView.setHighlight('R', mapR);
   }
 
   function reportStats(res) {
@@ -329,7 +373,7 @@
       var key = f.getAttribute('data-key');
       if (expanded[key]) delete expanded[key];
       else expanded[key] = true;
-      if (lastResult && lastResult.mode === 'grid') renderGrid(lastResult);
+      if (lastResult && lastResult.mode === 'grid') rerenderGridKeepScroll();
     }
   });
 
@@ -369,7 +413,7 @@
     setTimeout(compare, 0); // setValue 已触发 change，此处兜底确保重算
   });
 
-  // ---------- 历史记录 UI ----------
+  // ---------- 历史记录 UI（内联于侧边栏，无需点击展开） ----------
   function pad2(x) { return x < 10 ? '0' + x : '' + x; }
   function renderHistory() {
     var arr = loadHistory();
@@ -377,31 +421,19 @@
     for (var i = 0; i < arr.length; i++) {
       var it = arr[i];
       var d = new Date(it.ts);
-      var time = d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' '
+      var time = pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' '
                  + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
       var snippet = (it.left || '').replace(/\s+/g, ' ').slice(0, 24);
       html += '<div class="h-item">'
         + '<button class="h-restore" data-i="' + i + '">恢复</button>'
         + '<span class="h-time">' + time + '</span>'
-        + '<span class="h-snippet">' + escHtml(snippet) + '</span>'
-        + '<button class="h-del" data-i="' + i + '" title="删除">×</button></div>';
+        + '<button class="h-del" data-i="' + i + '" title="删除">×</button>'
+        + '<span class="h-snippet" title="' + escHtml(snippet) + '">' + escHtml(snippet) + '</span></div>';
     }
     if (arr.length) html += '<button class="h-clear">清空全部</button>';
-    historyPanel.innerHTML = html;
+    historyList.innerHTML = html;
   }
-  function toggleHistory() {
-    var hidden = historyPanel.classList.contains('hidden');
-    if (hidden) {
-      renderHistory();
-      historyPanel.classList.remove('hidden');
-    } else {
-      historyPanel.classList.add('hidden');
-    }
-  }
-  historyBtn.addEventListener('click', function (e) { e.stopPropagation(); toggleHistory(); });
-  document.addEventListener('click', function () { historyPanel.classList.add('hidden'); });
-  historyPanel.addEventListener('click', function (e) {
-    e.stopPropagation();
+  historyList.addEventListener('click', function (e) {
     var t = e.target;
     if (t.classList.contains('h-restore')) {
       var it = loadHistory()[+t.getAttribute('data-i')];
@@ -409,7 +441,6 @@
       editorL.setValue(it.left || '');
       editorR.setValue(it.right || '');
       applyOptions(it.options || {});
-      historyPanel.classList.add('hidden');
       compare();
     } else if (t.classList.contains('h-del')) {
       var arr = loadHistory();
@@ -572,7 +603,8 @@
     if (!p) { toast('请输入对比源路径', true); return; }
     setSrcPathCur(p);
     try { localStorage.setItem(SRCPATH_KEY, p); } catch (e) {}
-    if (FilterBar.reload) FilterBar.reload();
+    // 加载对比源后即用默认填充的第一组文件渲染主区域
+    if (FilterBar.reload) FilterBar.reload().then(onDirChange);
   }
   srcLoadBtn.addEventListener('click', function () { loadSrcPath(getSrcRoot()); });
   srcPathInput.addEventListener('keydown', function (ev) {
@@ -583,40 +615,50 @@
     if (savedSrc) { srcPathInput.value = savedSrc; setSrcPathCur(savedSrc); }
   } catch (e) {}
 
+  var fileSeq = { L: 0, R: 0 };   // 每侧文件加载令牌：同侧新加载作废旧加载（两侧可并行互不干扰）
   function loadFileToSide(side, absPath) {
     if (!absPath || !Source.fileUrl) return;
     var url = Source.fileUrl(absPath);
-    var my = ++switchSeq;                       // 陈旧异步丢弃令牌
+    var sw = switchSeq;                        // 快照：tab 切换作废在途加载
+    var my = ++fileSeq[side];
     if (/\.pdf$/i.test(absPath)) {
       // 单次取文档：渲染 + 提词复用同一份，提词成功后立即写编辑器
       var load = PdfView.load(side, url, my);
       if (load && load.then) {
         load.then(function () {
-          if (my !== switchSeq) return;
+          if (my !== fileSeq[side] || sw !== switchSeq) return;
           return PdfView.extractPanel(side);
         }).then(function (text) {
-          if (my !== switchSeq || !text) return;
+          if (my !== fileSeq[side] || sw !== switchSeq || !text) return;
           if (FilterBar.setFields) FilterBar.setFields(PdfView.segmentFields ? PdfView.segmentFields(text) : []);
           if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
         }).catch(function (err) {
-          if (my === switchSeq) toast('加载 PDF 失败：' + ((err && err.message) || err), true);
+          if (my === fileSeq[side] && sw === switchSeq) toast('加载 PDF 失败：' + ((err && err.message) || err), true);
         });
       }
     } else {
       fetch(url).then(function (r) { return r.text(); }).then(function (text) {
-        if (my !== switchSeq) return;
+        if (my !== fileSeq[side] || sw !== switchSeq) return;
         if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
         if (PdfView.clear) PdfView.clear(side);
       }).catch(function (err) {
-        if (my === switchSeq) toast('读取文件失败：' + ((err && err.message) || err), true);
+        if (my === fileSeq[side] && sw === switchSeq) toast('读取文件失败：' + ((err && err.message) || err), true);
       });
     }
+  }
+  /** 用户切换子文件夹（或加载对比源）后：按当前所选原始/修改文件立即渲染主区域 */
+  function onDirChange() {
+    var pL = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
+    var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
+    loadFileToSide('L', pL);
+    loadFileToSide('R', pR);
   }
   if (FilterBar.init) {
     FilterBar.init({
       getRoot: getSrcRoot,
       onFileChange: loadFileToSide,
-      onFieldPick: function (text) { editorL.setValue(text); }
+      onFieldPick: function (text) { editorL.setValue(text); },
+      onDirChange: onDirChange
     });
   }
   if (PdfView.init) PdfView.init({ left: $('pdfLeft'), right: $('pdfRight') });
@@ -635,7 +677,7 @@
   foldBtn.addEventListener('click', function () {
     foldEnabled = !foldEnabled;
     foldBtn.textContent = foldEnabled ? '折叠相同行' : '展开相同行';
-    if (lastResult && lastResult.mode === 'grid') renderGrid(lastResult);
+    if (lastResult && lastResult.mode === 'grid') rerenderGridKeepScroll();
   });
 
   // ---------- 跨区域协同滚动（主区域1 标注 / 主区域2 编辑 / 主区域3 PDF） ----------
@@ -654,6 +696,19 @@
   }
   function rebindScrollSync() {
     if (SyncScroll && SyncScroll.rebind) SyncScroll.rebind(currentScrollers());
+  }
+
+  /** 折叠/展开重渲染：保留原左右列的滚动比例，避免按钮点击后位置与跨区滚动“被重置” */
+  function rerenderGridKeepScroll() {
+    var lb = $('leftBody');
+    var ratio = (lb && lb.scrollHeight > lb.clientHeight) ? lb.scrollTop / (lb.scrollHeight - lb.clientHeight) : 0;
+    renderGrid(lastResult);                      // 内部会 rebindScrollSync
+    ['leftBody', 'rightBody'].forEach(function (id) {
+      var el = $(id);
+      if (!el) return;
+      var max = el.scrollHeight - el.clientHeight;
+      if (max > 0) el.scrollTop = ratio * max;   // 恢复比例；scroll 事件会带动其余区域同步
+    });
   }
 
   // ---------- 侧边栏 ----------
@@ -698,7 +753,7 @@
   function newTabState() {
     return {
       left: '', right: '',
-      options: { ignoreEol: true, ignoreCase: false, ignoreWhitespace: false, ignoreNewline: false, ignoreWidth: false, ignorePunct: false },
+      options: { ignoreEol: true, ignoreCase: true, ignoreWhitespace: true, ignoreNewline: true, ignoreWidth: true, ignorePunct: true },
       foldEnabled: true, editorsHidden: false, tidy: null,
       pdfMode: 'auto',
       srcRoot: '', dir: '', fileL: '', fileR: ''
@@ -819,4 +874,5 @@
   renderTabs();
   if (Tabs.setActive) Tabs.setActive(firstTab.id);  // → onSwitch → restoreTab（首次空状态渲染）
   setPdfZoom('auto');
+  renderHistory();                                 // 侧边栏历史首次渲染
 })();

@@ -4,10 +4,11 @@
  * 依赖 source-api（window.Source）做目录/文件列表；不依赖 app.js（低耦合）。
  * 全局暴露：FilterBar
  *
- * FilterBar.init({ getRoot, onFileChange, onFieldPick })
+ * FilterBar.init({ getRoot, onFileChange, onFieldPick, onDirChange })
  *   getRoot() → string          // 当前对比源绝对路径（来自侧边栏"对比源"）
  *   onFileChange(side, absPath) // side:'L'|'R'，用户选定文件
  *   onFieldPick(text)           // 用户选定某个字段（章节文本）
+ *   onDirChange()               // 用户手动切换子文件夹后回调（加载对比源/恢复 tab 不触发）
  * FilterBar.reload()            // 从 getRoot() 重新加载子文件夹与文件
  * FilterBar.setFields([{label,text}])  // 由 app 填充字段下拉
  * FilterBar.getSelected(side)   // 当前所选文件绝对路径（'' 表示未选）
@@ -15,7 +16,7 @@
 (function (root) {
   'use strict';
 
-  var cfg = { getRoot: null, onFileChange: null, onFieldPick: null };
+  var cfg = { getRoot: null, onFileChange: null, onFieldPick: null, onDirChange: null };
   var els = { dir: null, field: null, fileL: null, fileR: null };
   var currentDir = null;   // 当前子文件夹绝对路径
   var files = [];          // 当前文件列表 [{name,size,ext}]
@@ -43,6 +44,10 @@
       var items = files.map(function (f) { return { value: dirPath + '/' + f.name, label: f.name }; });
       fillSel(els.fileL, items);
       fillSel(els.fileR, items);
+      // 默认成对填充：原始=第一个文件，修改=第二个文件（不足则都取第一个）
+      if (items.length && !els.fileL.value) els.fileL.value = items[0].value;
+      if (items.length && !els.fileR.value) els.fileR.value = (items[1] || items[0]).value;
+      else if (items.length > 1 && els.fileR.value === els.fileL.value) els.fileR.value = items[1].value;
     }).catch(function () { files = []; });
   }
 
@@ -98,11 +103,14 @@
     cfg.getRoot = c.getRoot || null;
     cfg.onFileChange = c.onFileChange || null;
     cfg.onFieldPick = c.onFieldPick || null;
+    cfg.onDirChange = c.onDirChange || null;
     els.dir = $('dirSel');
     els.field = $('fieldSel');
     els.fileL = $('fileSelL');
     els.fileR = $('fileSelR');
-    if (els.dir) els.dir.addEventListener('change', function () { loadDir(els.dir.value); });
+    if (els.dir) els.dir.addEventListener('change', function () {
+      loadDir(els.dir.value).then(function () { if (cfg.onDirChange) cfg.onDirChange(); });
+    });
     if (els.field) els.field.addEventListener('change', function () {
       var opts = els.field.options || [];
       var t = '';

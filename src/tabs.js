@@ -9,7 +9,7 @@
  *   onSwitch(id)    切到某标签（id 与当前激活不同才触发；程序化 setActive 同样触发）
  *   onAdd()         点“＋”
  *   onClose(id)     点某标签的 ×
- * Tabs.setList([{id,title}])   // 渲染标签列表（不含 ＋，＋ 挂在 addBtn 上）
+ * Tabs.setList([{id,title}])   // 渲染标签列表（渲染时把 ＋ 移到最后一个标签之后）
  * Tabs.setActive(id)           // 激活标签（id 变化时触发 onSwitch）—— 切换逻辑的单一入口
  * Tabs.getActive()/getList()   // 供断言 / 外部读取
  */
@@ -47,6 +47,8 @@
         els.list.appendChild(el);
       })(tabs[i]);
     }
+    // “＋”紧跟在最后一个标签之后（innerHTML 清空会连带移除 DOM 节点，须每次重挂）
+    if (els.add) els.list.appendChild(els.add);
   }
 
   function setActive(id) {
