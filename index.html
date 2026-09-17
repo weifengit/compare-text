@@ -9,14 +9,28 @@
 </head>
 <body>
 
-<div class="app">
+<div class="app" id="appRoot">
 <header class="topbar">
-  <div class="brand">文本对比<span class="brand-sub">Text Diff · 离线纯前端</span></div>
   <button id="sidebarToggle" class="btn tb-toggle" type="button" aria-expanded="true" aria-controls="sidebar" title="展开 / 收起侧边栏">☰</button>
+  <div class="brand">文本对比<span class="brand-sub">Text Diff · 离线纯前端</span></div>
+  <div class="tb-actions">
+    <button id="tidyBtn" class="btn primary" title="将两侧文本中多余的空格、制表符、换行符与空行统一整理为一行">修整</button>
+    <button id="toggleEditorsBtn" class="btn" title="隐藏 / 显示主区域2（编辑区）">隐藏编辑区</button>
+    <button id="foldBtn" class="btn" title="折叠 / 展开连续相同的行">折叠相同行</button>
+    <button id="clearBtn" class="btn" title="清空加入比较的内容（编辑器与标注区）">清除</button>
+    <button id="historyBtn" class="btn">历史记录 ▾</button>
+  </div>
 </header>
 
 <div class="body-row">
   <aside class="sidebar" id="sidebar" aria-label="工具栏">
+    <div class="sb-title">对比源</div>
+    <div class="src-block">
+      <input id="srcPathInput" type="text" placeholder="输入绝对路径，如 /Users/xxx/对比源" spellcheck="false">
+      <button id="srcLoadBtn" class="btn" title="加载该路径下的子文件夹与文件">加载</button>
+    </div>
+    <div class="src-cur" id="srcPathCur">未设置对比源</div>
+
     <div class="sb-title">忽略选项</div>
     <div role="group" aria-label="忽略选项">
       <label class="chip" title="比较时忽略大小写"><input type="checkbox" id="optIgnoreCase">忽略大小写</label>
@@ -29,24 +43,41 @@
 
     <div class="sb-title">视图与操作</div>
     <button id="viewToggle" class="btn" title="切换并排 / 内联显示方式">内联视图</button>
-    <label class="chip" title="把连续相同的行折叠为一条小结"><input type="checkbox" id="foldToggle" checked>折叠相同行</label>
     <button id="copyUnified" class="btn" title="复制 unified diff 文本到剪贴板">复制 Unified Diff</button>
-    <button id="historyBtn" class="btn">历史记录 ▾</button>
-
-    <div class="sb-title">功能区</div>
-    <button id="tidyBtn" class="btn primary" title="将两侧文本中多余的空格、制表符、换行符与空行统一整理为一行">修整</button>
   </aside>
 
   <main class="main">
+    <div class="filterbar" id="filterbar">
+      <label class="fb-item">子文件夹 <select id="dirSel" title="对比源下的子文件夹"></select></label>
+      <label class="fb-item">字段 <select id="fieldSel" title="点击字段把章节文本复制到左侧编辑区"></select></label>
+      <label class="fb-item">原始文件 <select id="fileSelL" title="左侧（原文）文件"></select></label>
+      <label class="fb-item">修改文件 <select id="fileSelR" title="右侧（修改后）文件"></select></label>
+    </div>
+
     <div class="statusbar"><span id="status" role="status" aria-live="polite">在两侧粘贴文本即可自动对比</span><span id="stats" class="stats"></span></div>
 
     <div class="layout" id="layout">
       <div class="results" id="results"></div>
       <div class="resize-bar" id="resultsResize" title="拖动调整标注区域高度"><span class="resize-grip">⋮⋮⋮</span></div>
-      <section class="editors">
+      <section class="editors" id="editors">
         <div class="edpane"><div class="edlabel">原文 <em>Original</em></div><textarea id="leftEd" spellcheck="false"></textarea></div>
         <div class="edpane"><div class="edlabel">修改后 <em>Modified</em></div><textarea id="rightEd" spellcheck="false"></textarea></div>
       </section>
+      <div class="resize-bar" id="editorsResize" title="拖动调整编辑区与 PDF 区之间的距离"><span class="resize-grip">⋮⋮⋮</span></div>
+      <div class="pdfarea" id="pdfarea">
+        <div class="pdf-controls">
+          <button id="pdfAuto" class="btn" title="自动缩放：适应宽度但不超过实际大小">自动缩放</button>
+          <button id="pdfFitW" class="btn" title="适应宽度">适应宽度</button>
+          <button id="pdfFitP" class="btn" title="适应整页（宽高都适配）">适应页面</button>
+          <button id="pdfActual" class="btn" title="实际大小 100%">实际大小</button>
+          <span class="pdf-spacer"></span>
+          <button id="pdfFullscreen" class="btn" title="隐藏上方区域，释放空间显示 PDF">全屏</button>
+        </div>
+        <div class="pdf-panels">
+          <div class="pdf-panel" id="pdfLeft" title="左侧文件"></div>
+          <div class="pdf-panel" id="pdfRight" title="右侧文件"></div>
+        </div>
+      </div>
       <div class="vsplit" id="vsplit" title="左右拖动调整列宽"><span class="vsplit-grip">⋮</span></div>
     </div>
   </main>
@@ -55,10 +86,15 @@
 
 <div id="historyPanel" class="history-panel hidden"></div>
 
+<script src="lib/pdf.min.js"></script>
 <script src="lib/codemirror.min.js"></script>
 <script src="lib/diff.min.js"></script>
 <script src="src/normalize.js"></script>
 <script src="src/compute.js"></script>
+<script src="src/source-api.js"></script>
+<script src="src/filterbar.js"></script>
+<script src="src/pdfview.js"></script>
+<script src="src/syncscroll.js"></script>
 <script src="src/app.js"></script>
 </body>
 </html>

@@ -11,7 +11,8 @@
   var statusEl = $('status');
   var statsEl = $('stats');
   var viewToggle = $('viewToggle');
-  var foldToggle = $('foldToggle');
+  var foldBtn = $('foldBtn');
+  var toggleEditorsBtn = $('toggleEditorsBtn');
   var tidyBtn = $('tidyBtn');
   var resizeBar = $('resultsResize');
   var layoutEl = $('layout');
@@ -21,6 +22,14 @@
   var historyPanel = $('historyPanel');
   var sidebarEl = $('sidebar');
   var sidebarToggle = $('sidebarToggle');
+  var appEl = $('appRoot');
+  var editorsEl = $('editors');
+  var editorsResize = $('editorsResize');
+  var clearBtn = $('clearBtn');
+  var pdfFullscreen = $('pdfFullscreen');
+  var srcPathInput = $('srcPathInput');
+  var srcLoadBtn = $('srcLoadBtn');
+  var srcPathCur = $('srcPathCur');
 
   // ---------- 状态 ----------
   var OPT_MAP = {
@@ -91,7 +100,7 @@
       if (arr.length && arr[0].left === left && arr[0].right === right
           && JSON.stringify(arr[0].options) === JSON.stringify(readOptions())) return;
       arr.unshift({ ts: Date.now(), left: left, right: right, options: readOptions() });
-      arr = arr.slice(0, 10);
+      arr = arr.slice(0, 100);
       localStorage.setItem(HISTORY_KEY, JSON.stringify(arr));
     } catch (e) { /* quota 等异常忽略 */ }
   }
@@ -149,7 +158,7 @@
   function buildRowsWithFold(rows) {
     var n = rows.length, out = [], i = 0;
     while (i < n) {
-      if (foldToggle.checked && rows[i].type === 'equal') {
+      if (foldEnabled && rows[i].type === 'equal') {
         var j = i;
         while (j < n && rows[j].type === 'equal') j++;
         if (j - i >= 3) {
@@ -233,7 +242,7 @@
         html += '<div class="irow add"><span class="isign add">+</span><span class="iln">' + (r.ri + 1) + '</span><span class="icontent">' + escHtml(R[r.ri]) + '</span></div>';
       }
     }
-    results.innerHTML = '<div class="inline-body">' + html + '</div>';
+    results.innerHTML = '<div class="inline-body" id="inline-body">' + html + '</div>';
     reportStats(res);
   }
 
@@ -296,16 +305,18 @@
     lastResult = res;
     saveHistoryEntry();
     setBusy(false);
-    if (res.error) { results.innerHTML = ''; reportStats(null); return; }
+    if (res.error) { results.innerHTML = ''; reportStats(null); rebindScrollSync(); return; }
     if (editorL.getValue() === '' && editorR.getValue() === '') {
       results.innerHTML = '<div class="placeholder">在两侧粘贴文本，即可自动开始对比</div>';
       statsEl.innerHTML = '';
       statusEl.textContent = '在两侧粘贴文本即可自动对比';
+      rebindScrollSync();
       return;
     }
     if (res.mode === 'flow') renderFlow(res);
     else if (view === 'inline') renderInline(res);
     else renderGrid(res);
+    rebindScrollSync();
   }
 
   function reportStats(res) {
@@ -354,12 +365,6 @@
     if (lastResult && lastResult.mode === 'grid') {
       if (view === 'inline') renderInline(lastResult);
       else renderGrid(lastResult);
-    }
-  });
-
-  foldToggle.addEventListener('change', function () {
-    if (lastResult && lastResult.mode === 'grid') {
-      if (view === 'inline') renderInline(lastResult); else renderGrid(lastResult);
     }
   });
 
@@ -559,6 +564,138 @@
     var savedSplit = localStorage.getItem(SPLIT_KEY);
     if (savedSplit && /^\d+(\.\d+)?%$/.test(savedSplit)) layoutEl.style.setProperty('--split', savedSplit);
   } catch (e) {}
+
+  // ---------- 清除 ----------
+  clearBtn.addEventListener('click', function () {
+    editorL.setValue('');
+    editorR.setValue('');
+    tidyBefore = null;
+    setTidyBtnMode(false);
+    if (PdfView.clear) PdfView.clear();
+    if (FilterBar.setFields) FilterBar.setFields([]);
+    toast('已清除');
+    compare();
+  });
+
+  // ---------- 编辑区高度可调 ----------
+  var EDITORS_KEY = 'diffchecker_editors_h';
+  var edResizeState = null;
+  function clampEdH(h) { return Math.max(120, Math.min(640, h)); }
+  function onEdResizeMove(ev) {
+    if (!edResizeState) return;
+    var y = ev.touches ? ev.touches[0].clientY : ev.clientY;
+    editorsEl.style.height = clampEdH(edResizeState.base + (y - edResizeState.y)) + 'px';
+  }
+  function onEdResizeUp() {
+    if (!edResizeState) return;
+    document.removeEventListener('mousemove', onEdResizeMove);
+    document.removeEventListener('mouseup', onEdResizeUp);
+    document.removeEventListener('touchmove', onEdResizeMove);
+    document.removeEventListener('touchend', onEdResizeUp);
+    try { localStorage.setItem(EDITORS_KEY, editorsEl.style.height); } catch (e) {}
+    edResizeState = null;
+  }
+  function beginEdResize(startY) {
+    edResizeState = { y: startY, base: editorsEl.offsetHeight || 320 };
+    document.addEventListener('mousemove', onEdResizeMove);
+    document.addEventListener('mouseup', onEdResizeUp);
+    document.addEventListener('touchmove', onEdResizeMove);
+    document.addEventListener('touchend', onEdResizeUp);
+  }
+  editorsResize.addEventListener('mousedown', function (ev) { ev.preventDefault(); beginEdResize(ev.clientY); });
+  editorsResize.addEventListener('touchstart', function (ev) {
+    ev.preventDefault();
+    var t = ev.touches && ev.touches[0];
+    if (t) beginEdResize(t.clientY);
+  }, { passive: false });
+  try { var storedEdH = localStorage.getItem(EDITORS_KEY); if (storedEdH) editorsEl.style.height = storedEdH; } catch (e) {}
+
+  // ---------- PDF 全屏 ----------
+  var pdfFocus = false;
+  function setPdfFocus(on) {
+    pdfFocus = on;
+    appEl.classList.toggle('pdf-focus', on);
+    pdfFullscreen.textContent = on ? '还原' : '全屏';
+  }
+  pdfFullscreen.addEventListener('click', function () { setPdfFocus(!pdfFocus); });
+
+  // ---------- 对比源：侧边栏路径 + 顶部筛选区 + PDF 面板 ----------
+  var SRCPATH_KEY = 'diffchecker_srcpath';
+  function getSrcRoot() { return srcPathInput.value.trim(); }
+  function setSrcPathCur(txt) { srcPathCur.textContent = txt; }
+  function loadSrcPath(p) {
+    p = (p || '').trim();
+    if (!p) { toast('请输入对比源路径', true); return; }
+    setSrcPathCur(p);
+    try { localStorage.setItem(SRCPATH_KEY, p); } catch (e) {}
+    if (FilterBar.reload) FilterBar.reload();
+  }
+  srcLoadBtn.addEventListener('click', function () { loadSrcPath(getSrcRoot()); });
+  srcPathInput.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); loadSrcPath(getSrcRoot()); }
+  });
+  try {
+    var savedSrc = localStorage.getItem(SRCPATH_KEY);
+    if (savedSrc) { srcPathInput.value = savedSrc; setSrcPathCur(savedSrc); }
+  } catch (e) {}
+
+  function loadFileToSide(side, absPath) {
+    if (!absPath || !Source.fileUrl) return;
+    var url = Source.fileUrl(absPath);
+    if (PdfView.load) PdfView.load(side, url).catch(function () {});
+    if (PdfView.extractText) {
+      PdfView.extractText(url).then(function (text) {
+        if (FilterBar.setFields) FilterBar.setFields(PdfView.segmentFields ? PdfView.segmentFields(text) : []);
+        if (side === 'L') editorL.setValue(text);
+        else editorR.setValue(text);
+      }).catch(function () {});
+    }
+  }
+  if (FilterBar.init) {
+    FilterBar.init({
+      getRoot: getSrcRoot,
+      onFileChange: loadFileToSide,
+      onFieldPick: function (text) { editorL.setValue(text); }
+    });
+  }
+  if (PdfView.init) PdfView.init({ left: $('pdfLeft'), right: $('pdfRight') });
+
+  // ---------- 第一行按钮：隐藏/显示编辑区 + 折叠/展开相同行 ----------
+  var foldEnabled = true;
+  var editorsHidden = false;
+  function setEditorsHidden(h) {
+    editorsHidden = h;
+    editorsEl.classList.toggle('hidden', h);
+    editorsResize.classList.toggle('hidden', h);
+    toggleEditorsBtn.textContent = h ? '显示编辑区' : '隐藏编辑区';
+    queueCmRefresh();
+  }
+  toggleEditorsBtn.addEventListener('click', function () { setEditorsHidden(!editorsHidden); });
+  foldBtn.addEventListener('click', function () {
+    foldEnabled = !foldEnabled;
+    foldBtn.textContent = foldEnabled ? '折叠相同行' : '展开相同行';
+    if (lastResult && lastResult.mode === 'grid') {
+      if (view === 'inline') renderInline(lastResult); else renderGrid(lastResult);
+    }
+  });
+
+  // ---------- 跨区域协同滚动（主区域1 标注 / 主区域2 编辑 / 主区域3 PDF） ----------
+  function currentScrollers() {
+    var out = [];
+    var lb = $('leftBody'), rb = $('rightBody'), ib = $('inline-body');
+    if (lb) out.push(lb);
+    if (rb) out.push(rb);
+    if (ib) out.push(ib);
+    if (editorL && editorL.getScrollerElement) out.push(editorL.getScrollerElement());
+    if (editorR && editorR.getScrollerElement) out.push(editorR.getScrollerElement());
+    if (PdfView.getPanel) {
+      ['L', 'R'].forEach(function (s) { var p = PdfView.getPanel(s); if (p) out.push(p); });
+    }
+    return out;
+  }
+  function rebindScrollSync() {
+    if (SyncScroll && SyncScroll.rebind) SyncScroll.rebind(currentScrollers());
+  }
 
   // ---------- 侧边栏 ----------
   function isNarrow() {

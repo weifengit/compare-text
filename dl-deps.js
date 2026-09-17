@@ -8,6 +8,9 @@ const FILES = [
   ['https://cdn.jsdelivr.net/npm/diff@5.2.0/dist/diff.min.js', 'diff.min.js'],
   ['https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js', 'codemirror.min.js'],
   ['https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css', 'codemirror.css'],
+  // pdf.js legacy 构建（UMD 全局 window.pdfjsLib，兼容旧浏览器与无构建场景）
+  ['https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js', 'pdf.min.js'],
+  ['https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js', 'pdf.worker.min.js'],
 ];
 
 function download(url, dest) {

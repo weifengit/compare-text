@@ -56,6 +56,7 @@ var sandbox = {
     getElementById: function (id) { return els[id] || (els[id] = mkEl(id)); },
     createElement: function () { return mkEl('created'); },
     addEventListener: function () {},
+    removeEventListener: function () {},
     execCommand: function () { return false; }
   },
   navigator: { clipboard: undefined },
@@ -66,6 +67,8 @@ var sandbox = {
     workers.push(w);
     return w;
   },
+  fetch: function () { return Promise.resolve({ json: function () { return Promise.resolve({ ok: true, dirs: [], files: [] }); } }); },
+  pdfjsLib: { getDocument: function () { return { promise: Promise.reject(new Error('stub pdf')) }; } },
   setTimeout: setTimeout, clearTimeout: clearTimeout,
   // 浏览器主线程真实挂载方式：jsdiff 挂到大写 Diff
   Diff: require('../lib/diff.min.js')
@@ -75,6 +78,10 @@ vm.createContext(sandbox);
 // 与 index.html 相同的脚本加载顺序
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/normalize.js'), 'utf8'), sandbox, { filename: 'normalize.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/compute.js'), 'utf8'), sandbox, { filename: 'compute.js' });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/source-api.js'), 'utf8'), sandbox, { filename: 'source-api.js' });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/filterbar.js'), 'utf8'), sandbox, { filename: 'filterbar.js' });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/pdfview.js'), 'utf8'), sandbox, { filename: 'pdfview.js' });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/syncscroll.js'), 'utf8'), sandbox, { filename: 'syncscroll.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/app.js'), 'utf8'), sandbox, { filename: 'app.js' });
 var Compute = sandbox.Compute;
 
@@ -160,6 +167,54 @@ check('侧边栏：点击 ☰ 切换收起/展开', function () {
   if (!els['sidebar'].classList.contains('collapsed')) throw new Error('点击后应收起');
   els['sidebarToggle'].dispatch('click');
   if (els['sidebar'].classList.contains('collapsed')) throw new Error('再次点击应展开');
+});
+check('清除按钮清空两侧编辑器', function () {
+  editors[0].setValue('aaa');
+  editors[1].setValue('bbb');
+  els['clearBtn'].dispatch('click');
+  if (editors[0].getValue() !== '') throw new Error('清除后左侧应为空');
+  if (editors[1].getValue() !== '') throw new Error('清除后右侧应为空');
+});
+check('PDF 全屏：点击后在 appRoot 加 pdf-focus 且按钮变“还原”', function () {
+  els['pdfFullscreen'].dispatch('click');
+  if (!els['appRoot'].classList.contains('pdf-focus')) throw new Error('点击全屏后 appRoot 应含 pdf-focus');
+  if (els['pdfFullscreen'].textContent !== '还原') throw new Error('全屏后按钮文字应变“还原”');
+  els['pdfFullscreen'].dispatch('click');
+  if (els['appRoot'].classList.contains('pdf-focus')) throw new Error('再次点击应移除 pdf-focus');
+  if (els['pdfFullscreen'].textContent !== '全屏') throw new Error('还原后按钮文字应变“全屏”');
+});
+check('对比源：加载路径后 FilterBar 刷新不抛错（fetch 桩）', function () {
+  els['srcPathInput'].value = '/tmp/对比源';
+  els['srcLoadBtn'].dispatch('click');
+  if (els['srcPathCur'].textContent !== '/tmp/对比源') throw new Error('当前路径应显示');
+});
+check('隐藏/显示编辑区按钮切换', function () {
+  els['toggleEditorsBtn'].dispatch('click');
+  if (!els['editors'].classList.contains('hidden')) throw new Error('点击后编辑区应隐藏');
+  if (els['toggleEditorsBtn'].textContent !== '显示编辑区') throw new Error('按钮文字应变“显示编辑区”');
+  els['toggleEditorsBtn'].dispatch('click');
+  if (els['editors'].classList.contains('hidden')) throw new Error('再次点击应显示编辑区');
+  if (els['toggleEditorsBtn'].textContent !== '隐藏编辑区') throw new Error('按钮文字应变“隐藏编辑区”');
+});
+check('折叠/展开按钮：切换后 grid 渲染的折叠条随之变化', function () {
+  // 用 5 行相同 → 折叠键 '0:4'（避开前面折叠行点击用例已展开的 '0:3'）
+  var res = Compute.computeDiff({ left: 'x\nx\nx\nx\nx\ny', right: 'x\nx\nx\nx\nx\nz' });
+  res._options = { ignoreCase: false, ignoreEol: true };
+  editors[0].setValue('x\nx\nx\nx\nx\ny');     // 编辑器非空，跳过占位符分支
+  editors[1].setValue('x\nx\nx\nx\nx\nz');
+  var seqId = posted[posted.length - 1].id;   // 当前 seq，保证 onmessage 真正渲染
+  workers[0].onmessage({ data: { id: seqId, result: res } });
+  if (els['results'].innerHTML.indexOf('fold-bar') === -1) throw new Error('默认折叠态应含 fold-bar');
+  els['foldBtn'].dispatch('click');           // 折叠 → 展开相同行
+  if (els['foldBtn'].textContent !== '展开相同行') throw new Error('按钮文字应变“展开相同行”');
+  if (els['results'].innerHTML.indexOf('fold-bar') !== -1) throw new Error('展开态不应含 fold-bar');
+  els['foldBtn'].dispatch('click');           // 恢复折叠
+  if (els['results'].innerHTML.indexOf('fold-bar') === -1) throw new Error('重新折叠后应含 fold-bar');
+});
+check('跨区域协同滚动：rebind 绑定桩元素不抛错', function () {
+  var Sync = sandbox.SyncScroll;
+  if (!Sync || !Sync.rebind) throw new Error('SyncScroll 应已加载');
+  Sync.rebind([els['pdfLeft'], els['pdfRight']]);   // 桩元素无 removeEventListener，应被忽略
 });
 
 // ---- 端到端：勾选“忽略换行”→ change 事件 → 防抖 → worker 收到 ignoreNewline:true → flow ----
