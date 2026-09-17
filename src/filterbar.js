@@ -36,9 +36,9 @@
   }
 
   function loadDir(dirPath) {
-    if (!dirPath) return;
+    if (!dirPath) return Promise.resolve();
     currentDir = dirPath;
-    Source.list(dirPath).then(function (data) {
+    return Source.list(dirPath).then(function (data) {
       files = data.files;
       var items = files.map(function (f) { return { value: dirPath + '/' + f.name, label: f.name }; });
       fillSel(els.fileL, items);
@@ -47,21 +47,40 @@
   }
 
   function reload() {
-    if (!els.dir || !cfg.getRoot) return;
+    if (!els.dir || !cfg.getRoot) return Promise.resolve();
     var rootPath = cfg.getRoot();
-    if (!rootPath) return;
-    Source.list(rootPath).then(function (data) {
+    if (!rootPath) return Promise.resolve();
+    return Source.list(rootPath).then(function (data) {
       var dirItems = data.dirs.map(function (d) { return { value: rootPath + '/' + d, label: d }; });
       if (dirItems.length === 0) {
         fillSel(els.dir, [{ value: rootPath, label: '（根）' }]);
-        loadDir(rootPath);
-      } else {
-        var keep = els.dir.value;
-        fillSel(els.dir, dirItems);
-        if (!keep || !dirItems.some(function (d) { return d.value === keep; })) els.dir.value = dirItems[0].value;
-        loadDir(els.dir.value);
+        return loadDir(rootPath);
       }
+      var keep = els.dir.value;
+      fillSel(els.dir, dirItems);
+      if (!keep || !dirItems.some(function (d) { return d.value === keep; })) els.dir.value = dirItems[0].value;
+      return loadDir(els.dir.value);
     }).catch(function () { /* 路径无效等，静默 */ });
+  }
+
+  /** 选中某个子文件夹（若下拉里有对应选项则同步其显示），并加载其文件列表 */
+  function selectDir(absDir) {
+    if (!els.dir) return Promise.resolve();
+    if (absDir && els.dir.value !== absDir) {
+      var opts = els.dir.options || [];
+      for (var i = 0; i < opts.length; i++) {
+        if (opts[i].value === absDir) { els.dir.value = absDir; break; }
+      }
+    }
+    return loadDir(absDir || els.dir.value);
+  }
+
+  /** 设置某侧文件下拉的选中值；silent 时不触发 onFileChange（如 tab 恢复，避免重写编辑区文本） */
+  function selectFile(side, absPath, silent) {
+    var sel = side === 'L' ? els.fileL : els.fileR;
+    if (!sel) return;
+    sel.value = absPath || '';
+    if (!silent && absPath && cfg.onFileChange) cfg.onFileChange(side, absPath);
   }
 
   function setFields(fields) {
@@ -96,5 +115,8 @@
     if (els.fileR) els.fileR.addEventListener('change', function () { if (cfg.onFileChange) cfg.onFileChange('R', els.fileR.value); });
   }
 
-  root.FilterBar = { init: init, reload: reload, setFields: setFields, getSelected: getSelected };
+  root.FilterBar = {
+    init: init, reload: reload, setFields: setFields, getSelected: getSelected,
+    selectDir: selectDir, selectFile: selectFile
+  };
 })(typeof self !== 'undefined' ? self : this);

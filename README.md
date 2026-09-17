@@ -21,7 +21,10 @@ HOST=127.0.0.1 node serve.js    # 仅本机可访问
 
 ## 功能
 
-- **并排 / 内联** 两种视图切换；行级 + 字符级（词级）高亮
+- **多标签页**：点顶部 “＋” 开多个对比窗口，每个窗口独立保存文本/选项/PDF/对比源
+- **对比源 + 文件对比**：侧边栏设本地对比源，选子文件夹与原始/修改文件后立即渲染 PDF 面板并把文本带入编辑区
+- **PDF 面板**：自动缩放 / 适应宽度 / 适应页面 / 实际大小 四种缩放，可全屏
+- 行级 + 字符级（词级）高亮
 - **忽略选项**：
   - 忽略大小写
   - 忽略 CRLF/LF 行结束符（默认开）
@@ -30,24 +33,28 @@ HOST=127.0.0.1 node serve.js    # 仅本机可访问
   - 忽略全/半角（`（`＝`(`、`Ａ`＝`A` 等）
   - 忽略标点（括号、引号、逗号、句号、分号、百分号、星号、加减号、等号、波浪号等）
 - 折叠相同行（连续 ≥3 行相同自动折叠，点击展开）
-- 同步滚动（并排视图下左右联动）
-- 复制 Unified Diff 文本
-- 历史记录（localStorage 最近 10 条，可恢复/删除/清空）
+- 跨区域协同滚动（标注区 / 编辑区 / PDF 面板联动）
+- 历史记录（localStorage 最近 100 条，可恢复/删除/清空）
 - 差异统计（修改/新增/删除行数）
 
 ## 技术
 
-jsdiff（diff 算法）+ CodeMirror（输入编辑）+ Web Worker（大文本防卡顿）。
+jsdiff（diff 算法）+ CodeMirror（输入编辑）+ pdf.js（PDF 渲染）+ Web Worker（大文本防卡顿）。
 依赖已打包在 `lib/`，**完全离线可用**。
 
 ```
 index.html          页面骨架
 styles.css          全部样式
-lib/                jsdiff@5.2.0、CodeMirror@5.65.16（本地打包）
+lib/                jsdiff@5.2.0、CodeMirror@5.65.16、pdf.js（本地打包）
 src/normalize.js    归一化 + 分字符（纯逻辑，浏览器/Worker/Node 共用）
-src/compute.js      diff 计算管线（行级对齐、字符级高亮、unified diff）
+src/compute.js      diff 计算管线（行级对齐、字符级高亮）
+src/source-api.js   /api 封装（列出对比源目录/文件）
+src/filterbar.js    子文件夹/字段/文件下拉与加载
+src/pdfview.js      PDF 渲染与文本提取
+src/tabs.js         顶部多标签页栏
+src/syncscroll.js   跨区域协同滚动
 src/worker.js       Web Worker 入口
-src/app.js          界面 / 渲染 / 同步滚动 / 历史 / Worker 编排
+src/app.js          界面 / 渲染 / 多标签状态 / 历史 / Worker 编排
 test/               Node 冒烟测试
 serve.js            零依赖静态服务器
 ```

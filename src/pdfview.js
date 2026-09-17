@@ -16,6 +16,7 @@
 
   var panels = { L: null, R: null };
   var docs = { L: null, R: null };
+  var loadSeq = { L: 0, R: 0 };   // 每侧加载令牌：丢弃过期的 getDocument
   var mode = 'auto';
   var W = (typeof window !== 'undefined') ? window : null;
 
@@ -75,18 +76,24 @@
     for (var i = 1; i <= total; i++) renderPage(side, i, pdf);
   }
 
-  function load(side, url) {
+  function load(side, url, token) {
     if (!root.pdfjsLib) return Promise.reject(new Error('pdf.js 未加载'));
     clearPanel(side);
     var p = panels[side];
     if (!p) return Promise.resolve();
+    if (token === undefined) token = ++loadSeq[side];
+    else loadSeq[side] = token;
     p.innerHTML = '<div class="pdf-loading">加载 PDF…</div>';
     return root.pdfjsLib.getDocument(url).promise.then(function (pdf) {
+      if (loadSeq[side] !== token) {                 // 已被更新的加载取代 → 丢弃
+        try { pdf.destroy && pdf.destroy(); } catch (e) { /* 忽略 */ }
+        return undefined;
+      }
       docs[side] = pdf;
       renderAll(side);
       return pdf;
     }).catch(function (err) {
-      if (p) p.innerHTML = '<div class="pdf-error">PDF 加载失败：' + ((err && err.message) || err) + '</div>';
+      if (loadSeq[side] === token && p) p.innerHTML = '<div class="pdf-error">PDF 加载失败：' + ((err && err.message) || err) + '</div>';
       throw err;
     });
   }
@@ -106,33 +113,45 @@
     });
   }
 
-  /** 提取 PDF 全部文本（逐页，按文本项的 hasEOL 保留换行） */
+  /** 从已加载的 pdf 文档提取全部文本（逐页，按文本项的 hasEOL 保留换行） */
+  function collectText(pdf) {
+    var chunks = [];
+    var chain = Promise.resolve();
+    function onePage(n) {
+      return pdf.getPage(n).then(function (page) {
+        return page.getTextContent().then(function (tc) {
+          var out = '';
+          for (var i = 0; i < tc.items.length; i++) {
+            var it = tc.items[i];
+            out += it.str;
+            if (it.hasEOL) out += '\n';
+          }
+          chunks.push(out);
+        });
+      });
+    }
+    for (var i = 1; i <= pdf.numPages; i++) {
+      (function (n) { chain = chain.then(function () { return onePage(n); }); })(i);
+    }
+    return chain.then(function () { return chunks.join('\n'); });
+  }
+
+  /** 提取 PDF 全部文本（自建文档，提完销毁；供一次性取词使用） */
   function extractText(url) {
     if (!root.pdfjsLib) return Promise.reject(new Error('pdf.js 未加载'));
     return root.pdfjsLib.getDocument(url).promise.then(function (pdf) {
-      var chunks = [];
-      var chain = Promise.resolve();
-      function onePage(n) {
-        return pdf.getPage(n).then(function (page) {
-          return page.getTextContent().then(function (tc) {
-            var out = '';
-            for (var i = 0; i < tc.items.length; i++) {
-              var it = tc.items[i];
-              out += it.str;
-              if (it.hasEOL) out += '\n';
-            }
-            chunks.push(out);
-          });
-        });
-      }
-      for (var i = 1; i <= pdf.numPages; i++) {
-        (function (n) { chain = chain.then(function () { return onePage(n); }); })(i);
-      }
-      return chain.then(function () {
+      return collectText(pdf).then(function (text) {
         try { pdf.destroy && pdf.destroy(); } catch (e) { /* 忽略 */ }
-        return chunks.join('\n');
+        return text;
       });
     });
+  }
+
+  /** 从面板已加载的文档提取文本（不销毁，须在 load() 成功之后调用；供渲染+取词共用一次加载） */
+  function extractPanel(side) {
+    var pdf = docs[side];
+    if (!pdf) return Promise.reject(new Error('PDF 未加载'));
+    return collectText(pdf);
   }
 
   /** 字段分段（v1 启发式）：以编号/标题行作为新章节起点 */
@@ -157,6 +176,6 @@
     init: function (els) { panels.L = (els && els.left) || null; panels.R = (els && els.right) || null; },
     load: load, clear: clear, setMode: setMode, getMode: getMode,
     getPanel: function (side) { return panels[side] || null; },
-    extractText: extractText, segmentFields: segmentFields
+    extractText: extractText, extractPanel: extractPanel, segmentFields: segmentFields
   };
 })(typeof self !== 'undefined' ? self : this);

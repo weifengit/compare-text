@@ -1,6 +1,6 @@
 /**
  * ui-init.js — 用 DOM/浏览器 API 桩驱动 src/app.js：初始化 + 首次对比，
- * 再通过桩 Worker 回报结果，覆盖 renderGrid / renderFlow / renderInline / 折叠点击。
+ * 再通过桩 Worker 回报结果，覆盖 renderGrid / renderFlow / 折叠点击 / PDF 缩放 / 多标签页。
  * 运行：node -e "require('./test/ui-init.js')"
  */
 'use strict';
@@ -23,16 +23,24 @@ function mkClassList(seed) {
   };
 }
 function mkEl(id) {
-  return {
-    id: id, checked: false, textContent: '', innerHTML: '', value: '', style: {},
+  var el = {
+    id: id, checked: false, textContent: '', value: '', style: {},
     classList: mkClassList(),
+    children: [],
     _listeners: {},
     addEventListener: function (type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); },
     dispatch: function (type, ev) { (this._listeners[type] || []).forEach(function (f) { f(ev || {}); }); },
     getAttribute: function () { return null; },
     closest: function () { return null; },
-    appendChild: function () {}, remove: function () {}, select: function () {}, setAttribute: function () {}
+    appendChild: function (el2) { this.children.push(el2); },
+    remove: function () {}, select: function () {}, setAttribute: function () {}
   };
+  // innerHTML 赋值同时清空 children，保证重渲染后 children 反映最新结构
+  Object.defineProperty(el, 'innerHTML', {
+    get: function () { return this._html || ''; },
+    set: function (v) { this._html = v; this.children.length = 0; }
+  });
+  return el;
 }
 var mkEditor = function () {
   return {
@@ -67,7 +75,12 @@ var sandbox = {
     workers.push(w);
     return w;
   },
-  fetch: function () { return Promise.resolve({ json: function () { return Promise.resolve({ ok: true, dirs: [], files: [] }); } }); },
+  fetch: function () {
+    return Promise.resolve({
+      json: function () { return Promise.resolve({ ok: true, dirs: [], files: [] }); },
+      text: function () { return Promise.resolve('非PDF文件文本'); }
+    });
+  },
   pdfjsLib: { getDocument: function () { return { promise: Promise.reject(new Error('stub pdf')) }; } },
   setTimeout: setTimeout, clearTimeout: clearTimeout,
   // 浏览器主线程真实挂载方式：jsdiff 挂到大写 Diff
@@ -82,6 +95,7 @@ vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/source-api.js'), 'u
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/filterbar.js'), 'utf8'), sandbox, { filename: 'filterbar.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/pdfview.js'), 'utf8'), sandbox, { filename: 'pdfview.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/syncscroll.js'), 'utf8'), sandbox, { filename: 'syncscroll.js' });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/tabs.js'), 'utf8'), sandbox, { filename: 'tabs.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/app.js'), 'utf8'), sandbox, { filename: 'app.js' });
 var Compute = sandbox.Compute;
 
@@ -152,12 +166,67 @@ check('修整按钮一键切换：修整→撤销修整（换字换色）→恢�
   if (editors[0].getValue() !== L) throw new Error('撤销后左侧未恢复: ' + JSON.stringify(editors[0].getValue()));
   if (editors[1].getValue() !== R) throw new Error('撤销后右侧未恢复');
 });
-check('内联视图切换后重新渲染不抛错', function () {
-  var grid = Compute.computeDiff({ left: 'a\nb', right: 'a\nX' });
-  grid._options = { ignoreCase: false, ignoreEol: true };
-  workers[0].onmessage({ data: { id: 4, result: grid } });
-  els['viewToggle'].dispatch('click');   // side -> inline
-  els['viewToggle'].dispatch('click');   // inline -> side
+check('PDF 缩放：四个按钮接线且高亮互斥', function () {
+  var Pdf = sandbox.PdfView;
+  if (!Pdf || !Pdf.getMode) throw new Error('PdfView 应已加载');
+  if (Pdf.getMode() !== 'auto') throw new Error('初始模式应为 auto，实际 ' + Pdf.getMode());
+  if (!els['pdfAuto'].classList.contains('active')) throw new Error('初始自动缩放应高亮');
+  els['pdfFitW'].dispatch('click');
+  if (Pdf.getMode() !== 'width') throw new Error('点击适应宽度后模式应变 width');
+  if (!els['pdfFitW'].classList.contains('active')) throw new Error('适应宽度按钮应高亮');
+  if (els['pdfAuto'].classList.contains('active')) throw new Error('自动缩放应取消高亮');
+  els['pdfActual'].dispatch('click');
+  if (Pdf.getMode() !== 'actual') throw new Error('点击实际大小后模式应变 actual');
+  if (els['pdfFitW'].classList.contains('active')) throw new Error('适应宽度应取消高亮');
+  els['pdfAuto'].dispatch('click');
+  if (Pdf.getMode() !== 'auto') throw new Error('点击自动缩放后模式应变 auto');
+});
+check('点 ＋ 新建空白对比窗口', function () {
+  var T = sandbox.Tabs;
+  if (!T || !T.getActive) throw new Error('Tabs 应已加载');
+  if (T.getActive() !== 1) throw new Error('初始激活 tab 应为 1，实际 ' + T.getActive());
+  if (T.getList().length !== 1) throw new Error('初始应有 1 个 tab');
+  els['tabAdd'].dispatch('click');
+  if (T.getList().length !== 2) throw new Error('点击 ＋ 后应有 2 个 tab');
+  if (T.getActive() === 1) throw new Error('应切到新 tab');
+  if (editors[0].getValue() !== '' || editors[1].getValue() !== '') throw new Error('新 tab 编辑器应为空');
+});
+check('tab 切换：各自保存/恢复编辑内容', function () {
+  var T = sandbox.Tabs;
+  var tab0 = T.getActive();
+  if (tab0 !== 2) throw new Error('当前激活应为 2（上个用例新建），实际 ' + tab0);
+  editors[0].setValue('AAAA');
+  editors[1].setValue('BBBB');
+  els['tabAdd'].dispatch('click');          // 新 tab3（空白）
+  var tab1 = T.getActive();
+  if (tab1 === tab0) throw new Error('应切到新 tab');
+  editors[0].setValue('1111');
+  editors[1].setValue('2222');
+  T.setActive(tab0);                        // 切回 tab0
+  if (editors[0].getValue() !== 'AAAA') throw new Error('tab0 左侧应恢复 AAAA，实际 ' + JSON.stringify(editors[0].getValue()));
+  if (editors[1].getValue() !== 'BBBB') throw new Error('tab0 右侧应恢复 BBBB');
+  T.setActive(tab1);                        // 切回 tab1
+  if (editors[0].getValue() !== '1111') throw new Error('tab1 左侧应恢复 1111');
+  if (editors[1].getValue() !== '2222') throw new Error('tab1 右侧应恢复 2222');
+});
+check('关闭 tab：激活的关后选邻居 / 非激活直接移除 / 最后一个拒绝', function () {
+  var T = sandbox.Tabs;
+  // 前置：上个用例结束后有 tab1/tab2/tab3，激活 tab3（下标 2）
+  if (T.getList().length !== 3) throw new Error('前置应有 3 个 tab，实际 ' + T.getList().length);
+  var tabsEl = els['tabs'];
+  var stopEv = { stopPropagation: function () {} };
+  // 关闭激活中的 tab3 → 应切到邻居 tab2
+  tabsEl.children[2].children[1].dispatch('click', stopEv);
+  if (T.getList().length !== 2) throw new Error('关闭后应有 2 个 tab，实际 ' + T.getList().length);
+  if (T.getActive() !== 2) throw new Error('关闭激活 tab 后应激活邻居 tab2，实际 ' + T.getActive());
+  // 关闭非激活 tab1 → 仅移除，激活不变
+  tabsEl.children[0].children[1].dispatch('click', stopEv);
+  if (T.getList().length !== 1) throw new Error('关闭非激活 tab 后应有 1 个 tab');
+  if (T.getActive() !== 2) throw new Error('关闭非激活 tab 不应改变激活');
+  // 最后一个 tab 拒绝关闭
+  tabsEl.children[0].children[1].dispatch('click', stopEv);
+  if (T.getList().length !== 1) throw new Error('最后一个 tab 应拒绝关闭');
+  if (T.getActive() !== 2) throw new Error('拒绝关闭后激活不变');
 });
 check('侧边栏：宽屏沙箱默认展开', function () {
   if (els['sidebar'].classList.contains('collapsed')) throw new Error('宽屏（无 window）下侧边栏应默认展开');
@@ -254,8 +323,23 @@ setTimeout(function () {
         failed++;
         console.log('FAIL  端到端忽略换行链路\n      ' + e.message + '\n' + (e.stack || '').split('\n').slice(0, 6).join('\n'));
       }
-      console.log('\n' + passed + ' passed, ' + failed + ' failed');
-      process.exit(failed ? 1 : 0);
+      // 文件选择立即响应：选非 PDF 文件 → fetch 微任务写入编辑区，再等一帧汇总
+      els['fileSelL'].value = '/tmp/测试文档.txt';
+      els['fileSelL'].dispatch('change');   // FilterBar change → onFileChange('L', path) → loadFileToSide
+      setTimeout(function () {
+        try {
+          if (editors[0].getValue() !== '非PDF文件文本') {
+            throw new Error('非 PDF 文件文本应进左侧编辑区，实际 ' + JSON.stringify(editors[0].getValue()));
+          }
+          passed++;
+          console.log('  ok  文件选择：非 PDF 文本立即进编辑区');
+        } catch (e2) {
+          failed++;
+          console.log('FAIL  文件选择立即响应\n      ' + e2.message);
+        }
+        console.log('\n' + passed + ' passed, ' + failed + ' failed');
+        process.exit(failed ? 1 : 0);
+      }, 0);
     }, 600);
   } catch (e) {
     failed++;

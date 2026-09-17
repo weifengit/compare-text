@@ -1,6 +1,6 @@
 /**
- * app.js — 界面层：CodeMirror 编辑、选项、渲染（并排/内联/流水）、同步滚动、
- * 折叠相同行、复制 unified diff、历史记录（localStorage）、Worker 编排与降级。
+ * app.js — 界面层：多标签页、CodeMirror 编辑、选项、渲染（并排/流水）、同步滚动、
+ * 折叠相同行、对比源/PDF 面板、历史记录（localStorage）、Worker 编排与降级。
  */
 (function () {
   'use strict';
@@ -10,14 +10,12 @@
   var results = $('results');
   var statusEl = $('status');
   var statsEl = $('stats');
-  var viewToggle = $('viewToggle');
   var foldBtn = $('foldBtn');
   var toggleEditorsBtn = $('toggleEditorsBtn');
   var tidyBtn = $('tidyBtn');
   var resizeBar = $('resultsResize');
   var layoutEl = $('layout');
   var vsplitEl = $('vsplit');
-  var copyBtn = $('copyUnified');
   var historyBtn = $('historyBtn');
   var historyPanel = $('historyPanel');
   var sidebarEl = $('sidebar');
@@ -40,7 +38,6 @@
     optIgnoreWidth: 'ignoreWidth',
     optIgnorePunct: 'ignorePunct'
   };
-  var view = 'side';            // 'side' | 'inline'
   var expanded = {};            // 折叠行展开状态
   var lastResult = null;        // 最近一次计算结果
   var lastOptions = null;       // 最近一次对比所用选项
@@ -52,6 +49,12 @@
   var RESIZE_KEY = 'diffchecker_results_h';
   var tidyBefore = null;    // 修整前的两侧文本快照（用于撤销）
   var resizeState = null;   // 标注区拖拽调整状态
+  var switchSeq = 0;        // 单调递增：tab 切换 / 文件加载的陈旧异步丢弃令牌
+  var restoring = false;    // tab 恢复中：抑制 setValue 触发的防抖 compare
+  var lastCompareIsRestore = false;  // 本次 compare 是否由 tab 恢复发起（抑制历史记录）
+  var tabs = [];            // 多标签页：[{id, title, state}]
+  var activeTabId = null;
+  var tabSeq = 0;
   var SIDEBAR_KEY = 'diffchecker_sidebar';
   var sidebarOpen = true;      // 侧边栏实时状态（不读 classList.contains）
   var sidebarPref = null;      // 持久化的用户偏好；null = 默认展开
@@ -127,7 +130,8 @@
   function runLocal(payload) {
     try { return Compute.computeDiff(payload); } catch (e) { return { error: String((e && e.stack) || e) }; }
   }
-  function compare() {
+  function compare(fromRestore) {
+    lastCompareIsRestore = !!fromRestore;
     var left = editorL.getValue(), right = editorR.getValue();
     var o = readOptions();
     lastOptions = o;
@@ -217,32 +221,6 @@
       '<div class="grid-body" id="leftBody">' + leftBody + '</div>' +
       '<div class="grid-body" id="rightBody">' + rightBody + '</div>' +
       '</div>';
-    syncScroll();
-    reportStats(res);
-  }
-
-  function renderInline(res) {
-    var rowsArr = buildRowsWithFold(res.rows);
-    var L = res.leftLines, R = res.rightLines;
-    var html = '';
-    for (var i = 0; i < rowsArr.length; i++) {
-      var r = rowsArr[i];
-      if (r.type === 'fold') {
-        html += '<div class="irow fold-row" data-key="' + r.key + '"><span class="fold-bar" style="flex:1">▶ ' + r.count + ' ' + FOLD_LABEL + '</span></div>';
-        continue;
-      }
-      if (r.type === 'equal') {
-        html += '<div class="irow eq"><span class="isign"> </span><span class="iln">' + (r.li + 1) + '</span><span class="icontent">' + escHtml(L[r.li]) + '</span></div>';
-      } else if (r.type === 'change') {
-        html += '<div class="irow del"><span class="isign del">-</span><span class="iln">' + (r.li + 1) + '</span><span class="icontent">' + segsHtml(r.segL) + '</span></div>';
-        html += '<div class="irow add"><span class="isign add">+</span><span class="iln">' + (r.ri + 1) + '</span><span class="icontent">' + segsHtml(r.segR) + '</span></div>';
-      } else if (r.type === 'remove') {
-        html += '<div class="irow del"><span class="isign del">-</span><span class="iln">' + (r.li + 1) + '</span><span class="icontent">' + escHtml(L[r.li]) + '</span></div>';
-      } else if (r.type === 'add') {
-        html += '<div class="irow add"><span class="isign add">+</span><span class="iln">' + (r.ri + 1) + '</span><span class="icontent">' + escHtml(R[r.ri]) + '</span></div>';
-      }
-    }
-    results.innerHTML = '<div class="inline-body" id="inline-body">' + html + '</div>';
     reportStats(res);
   }
 
@@ -303,7 +281,8 @@
 
   function renderResult(res) {
     lastResult = res;
-    saveHistoryEntry();
+    if (!lastCompareIsRestore) saveHistoryEntry();
+    lastCompareIsRestore = false;
     setBusy(false);
     if (res.error) { results.innerHTML = ''; reportStats(null); rebindScrollSync(); return; }
     if (editorL.getValue() === '' && editorR.getValue() === '') {
@@ -314,7 +293,6 @@
       return;
     }
     if (res.mode === 'flow') renderFlow(res);
-    else if (view === 'inline') renderInline(res);
     else renderGrid(res);
     rebindScrollSync();
   }
@@ -338,35 +316,12 @@
     }
   }
 
-  // ---------- 同步滚动 ----------
-  function syncScroll() {
-    var l = $('leftBody'), rEl = $('rightBody');
-    if (!l || !rEl) return;
-    var syncing = false;
-    function make(a, b) {
-      return function () {
-        if (syncing) return;
-        syncing = true;
-        b.scrollTop = a.scrollTop;
-        b.scrollLeft = a.scrollLeft;
-        syncing = false;
-      };
-    }
-    l.addEventListener('scroll', make(l, rEl));
-    rEl.addEventListener('scroll', make(rEl, l));
-  }
-
   // ---------- 事件 -------
-  function scheduleCompare() { clearTimeout(debounceTimer); debounceTimer = setTimeout(compare, 400); }
-
-  viewToggle.addEventListener('click', function () {
-    view = view === 'side' ? 'inline' : 'side';
-    viewToggle.textContent = view === 'side' ? '内联视图' : '并排视图';
-    if (lastResult && lastResult.mode === 'grid') {
-      if (view === 'inline') renderInline(lastResult);
-      else renderGrid(lastResult);
-    }
-  });
+  function scheduleCompare() {
+    if (restoring) return;                       // tab 恢复期间 setValue 触发的 change 不发对比
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(compare, 400);
+  }
 
   results.addEventListener('click', function (e) {
     var f = e.target.closest('.fold-row');
@@ -374,9 +329,7 @@
       var key = f.getAttribute('data-key');
       if (expanded[key]) delete expanded[key];
       else expanded[key] = true;
-      if (lastResult && lastResult.mode === 'grid') {
-        if (view === 'inline') renderInline(lastResult); else renderGrid(lastResult);
-      }
+      if (lastResult && lastResult.mode === 'grid') renderGrid(lastResult);
     }
   });
 
@@ -414,31 +367,6 @@
     setTidyBtnMode(true);
     toast('已整理为一行，可撤销');
     setTimeout(compare, 0); // setValue 已触发 change，此处兜底确保重算
-  });
-
-  copyBtn.addEventListener('click', function () {
-    if (!lastResult || !lastResult.unified) {
-      toast('当前无差异，或忽略换行模式下暂无 unified 文本', true);
-      return;
-    }
-    var text = lastResult.unified;
-    var done = function () { toast('已复制 unified diff'); };
-    var fail = function () {
-      // 降级：textarea 选中复制
-      var ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      var ok = false;
-      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
-      ta.remove();
-      toast(ok ? '已复制 unified diff' : '复制失败，请手动选择', !ok);
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(done, fail);
-    } else fail();
   });
 
   // ---------- 历史记录 UI ----------
@@ -497,12 +425,12 @@
   // ---------- 标注区域高度可调 ----------
   function clampResizeH(h) { return Math.max(110, Math.min(640, h)); }
   function onResizeMove(ev) {
-    if (!resizeState) return;
+    if (!resizeState || resizeState.mode !== 'results') return;
     var y = ev.touches ? ev.touches[0].clientY : ev.clientY;
     results.style.height = clampResizeH(resizeState.base + (y - resizeState.y)) + 'px';
   }
   function onResizeUp() {
-    if (!resizeState) return;
+    if (!resizeState || resizeState.mode !== 'results') return;
     document.removeEventListener('mousemove', onResizeMove);
     document.removeEventListener('mouseup', onResizeUp);
     document.removeEventListener('touchmove', onResizeMove);
@@ -511,7 +439,7 @@
     resizeState = null;
   }
   function beginResize(startY) {
-    resizeState = { y: startY, base: results.offsetHeight || 280 };
+    resizeState = { mode: 'results', y: startY, base: results.offsetHeight || 280 };
     document.addEventListener('mousemove', onResizeMove);
     document.addEventListener('mouseup', onResizeUp);
     document.addEventListener('touchmove', onResizeMove);
@@ -619,6 +547,22 @@
   }
   pdfFullscreen.addEventListener('click', function () { setPdfFocus(!pdfFocus); });
 
+  // ---------- PDF 缩放（自动缩放/适应宽度/适应页面/实际大小，互斥高亮） ----------
+  var ZOOM_BTNS = { auto: $('pdfAuto'), width: $('pdfFitW'), page: $('pdfFitP'), actual: $('pdfActual') };
+  function setPdfZoom(mode) {
+    for (var m in ZOOM_BTNS) {
+      var b = ZOOM_BTNS[m];
+      if (b) b.classList.toggle('active', m === mode);
+    }
+    if (PdfView.setMode) PdfView.setMode(mode);
+  }
+  for (var m in ZOOM_BTNS) {
+    (function (mode) {
+      var b = ZOOM_BTNS[mode];
+      if (b) b.addEventListener('click', function () { setPdfZoom(mode); });
+    })(m);
+  }
+
   // ---------- 对比源：侧边栏路径 + 顶部筛选区 + PDF 面板 ----------
   var SRCPATH_KEY = 'diffchecker_srcpath';
   function getSrcRoot() { return srcPathInput.value.trim(); }
@@ -642,13 +586,30 @@
   function loadFileToSide(side, absPath) {
     if (!absPath || !Source.fileUrl) return;
     var url = Source.fileUrl(absPath);
-    if (PdfView.load) PdfView.load(side, url).catch(function () {});
-    if (PdfView.extractText) {
-      PdfView.extractText(url).then(function (text) {
-        if (FilterBar.setFields) FilterBar.setFields(PdfView.segmentFields ? PdfView.segmentFields(text) : []);
-        if (side === 'L') editorL.setValue(text);
-        else editorR.setValue(text);
-      }).catch(function () {});
+    var my = ++switchSeq;                       // 陈旧异步丢弃令牌
+    if (/\.pdf$/i.test(absPath)) {
+      // 单次取文档：渲染 + 提词复用同一份，提词成功后立即写编辑器
+      var load = PdfView.load(side, url, my);
+      if (load && load.then) {
+        load.then(function () {
+          if (my !== switchSeq) return;
+          return PdfView.extractPanel(side);
+        }).then(function (text) {
+          if (my !== switchSeq || !text) return;
+          if (FilterBar.setFields) FilterBar.setFields(PdfView.segmentFields ? PdfView.segmentFields(text) : []);
+          if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
+        }).catch(function (err) {
+          if (my === switchSeq) toast('加载 PDF 失败：' + ((err && err.message) || err), true);
+        });
+      }
+    } else {
+      fetch(url).then(function (r) { return r.text(); }).then(function (text) {
+        if (my !== switchSeq) return;
+        if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
+        if (PdfView.clear) PdfView.clear(side);
+      }).catch(function (err) {
+        if (my === switchSeq) toast('读取文件失败：' + ((err && err.message) || err), true);
+      });
     }
   }
   if (FilterBar.init) {
@@ -674,9 +635,7 @@
   foldBtn.addEventListener('click', function () {
     foldEnabled = !foldEnabled;
     foldBtn.textContent = foldEnabled ? '折叠相同行' : '展开相同行';
-    if (lastResult && lastResult.mode === 'grid') {
-      if (view === 'inline') renderInline(lastResult); else renderGrid(lastResult);
-    }
+    if (lastResult && lastResult.mode === 'grid') renderGrid(lastResult);
   });
 
   // ---------- 跨区域协同滚动（主区域1 标注 / 主区域2 编辑 / 主区域3 PDF） ----------
@@ -735,6 +694,119 @@
     window.addEventListener('resize', refreshSidebarForViewport);
   }
 
+  // ---------- 多标签页（会话切换：每标签保存自己的内容/选项/PDF/源文件） ----------
+  function newTabState() {
+    return {
+      left: '', right: '',
+      options: { ignoreEol: true, ignoreCase: false, ignoreWhitespace: false, ignoreNewline: false, ignoreWidth: false, ignorePunct: false },
+      foldEnabled: true, editorsHidden: false, tidy: null,
+      pdfMode: 'auto',
+      srcRoot: '', dir: '', fileL: '', fileR: ''
+    };
+  }
+  function captureState() {
+    return {
+      left: editorL.getValue(), right: editorR.getValue(),
+      options: readOptions(),
+      foldEnabled: foldEnabled, editorsHidden: editorsHidden, tidy: tidyBefore,
+      pdfMode: PdfView.getMode ? PdfView.getMode() : 'auto',
+      srcRoot: srcPathInput.value.trim(),
+      dir: $('dirSel') ? $('dirSel').value : '',
+      fileL: FilterBar.getSelected ? FilterBar.getSelected('L') : '',
+      fileR: FilterBar.getSelected ? FilterBar.getSelected('R') : ''
+    };
+  }
+  function activeIndex() {
+    for (var i = 0; i < tabs.length; i++) if (tabs[i].id === activeTabId) return i;
+    return -1;
+  }
+  function currentTab() { var i = activeIndex(); return i < 0 ? null : tabs[i]; }
+  function renderTabs() {
+    if (Tabs && Tabs.setList) Tabs.setList(tabs.map(function (t) { return { id: t.id, title: t.title }; }));
+  }
+  function restoreTab(tab) {
+    restoring = true;
+    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+    editorL.setValue(tab.left || '');
+    editorR.setValue(tab.right || '');
+    applyOptions(tab.options || {});
+    foldEnabled = tab.foldEnabled !== false;
+    foldBtn.textContent = foldEnabled ? '折叠相同行' : '展开相同行';
+    setEditorsHidden(!!tab.editorsHidden);
+    tidyBefore = tab.tidy || null;
+    setTidyBtnMode(!!tidyBefore);
+    expanded = {};
+    if (PdfView.setMode) PdfView.setMode(tab.pdfMode || 'auto');
+    if (tab.srcRoot) { srcPathInput.value = tab.srcRoot; setSrcPathCur(tab.srcRoot); }
+    if (FilterBar.setFields) FilterBar.setFields([]);
+    compare(true);                                 // 渲染差异区（恢复发起，不写历史）
+    restoring = false;
+    restorePdfFiles(tab);                          // 异步恢复 PDF / 文件下拉
+  }
+  function selectTabFiles(tab, my) {
+    var pair = [['L', tab.fileL], ['R', tab.fileR]];
+    for (var i = 0; i < pair.length; i++) {
+      var side = pair[i][0], path = pair[i][1];
+      if (FilterBar.selectFile) FilterBar.selectFile(side, path || '', true);
+      if (path && Source.fileUrl) {
+        if (/\.pdf$/i.test(path)) { if (PdfView.load) PdfView.load(side, Source.fileUrl(path), my).catch(function () {}); }
+        else if (PdfView.clear) PdfView.clear(side);
+      } else if (PdfView.clear) PdfView.clear(side);
+    }
+  }
+  function restorePdfFiles(tab) {
+    var my = ++switchSeq;
+    if (!tab.srcRoot && !tab.dir && !tab.fileL && !tab.fileR) {  // 空白 tab：清空选择与 PDF
+      if (FilterBar.selectFile) { FilterBar.selectFile('L', '', true); FilterBar.selectFile('R', '', true); }
+      if (PdfView.clear) PdfView.clear();
+      return;
+    }
+    var chain = (tab.srcRoot && tab.srcRoot !== getSrcRoot() && FilterBar.reload)
+      ? FilterBar.reload() : Promise.resolve();
+    chain.then(function () {
+      if (my !== switchSeq) return;
+      if (tab.dir && tab.dir !== ($('dirSel') ? $('dirSel').value : '') && FilterBar.selectDir) {
+        return FilterBar.selectDir(tab.dir);
+      }
+    }).then(function () {
+      if (my !== switchSeq) return;
+      selectTabFiles(tab, my);
+    }).catch(function () { /* 恢复失败不致命：编辑区内容已恢复 */ });
+  }
+  function onTabSwitch(id) {
+    if (id === activeTabId) return;
+    var cur = currentTab();
+    if (cur) cur.state = captureState();
+    activeTabId = id;
+    restoreTab(currentTab().state);
+  }
+  function onTabAdd() {
+    var id = ++tabSeq;
+    tabs.push({ id: id, title: '对比 ' + id, state: newTabState() });
+    renderTabs();
+    if (Tabs.setActive) Tabs.setActive(id);
+  }
+  function onTabClose(id) {
+    if (tabs.length <= 1) { toast('至少保留一个对比窗口'); return; }
+    var idx = -1;
+    for (var i = 0; i < tabs.length; i++) if (tabs[i].id === id) { idx = i; break; }
+    if (idx < 0) return;
+    if (id === activeTabId) {
+      var nb = tabs[idx === 0 ? 1 : idx - 1];
+      tabs.splice(idx, 1);
+      activeTabId = nb.id;
+      renderTabs();
+      restoreTab(nb.state);
+      if (Tabs.setActive) Tabs.setActive(nb.id);   // 内部 activeId 仍是已关闭 id → 触发 onSwitch → 守卫空转
+    } else {
+      tabs.splice(idx, 1);
+      renderTabs();
+    }
+  }
+  if (Tabs && Tabs.init) {
+    Tabs.init({ listEl: $('tabs'), addBtn: $('tabAdd'), onAdd: onTabAdd, onSwitch: onTabSwitch, onClose: onTabClose });
+  }
+
   // ---------- 初始化 ----------
   editorL = CodeMirror.fromTextArea($('leftEd'), { lineNumbers: true, mode: 'text/plain', lineWrapping: true, autofocus: true });
   editorR = CodeMirror.fromTextArea($('rightEd'), { lineNumbers: true, mode: 'text/plain', lineWrapping: true });
@@ -742,5 +814,9 @@
   editorL.on('change', scheduleCompare);
   editorR.on('change', scheduleCompare);
   setTidyBtnMode(false);
-  compare();
+  var firstTab = { id: ++tabSeq, title: '对比 ' + tabSeq, state: newTabState() };
+  tabs.push(firstTab);
+  renderTabs();
+  if (Tabs.setActive) Tabs.setActive(firstTab.id);  // → onSwitch → restoreTab（首次空状态渲染）
+  setPdfZoom('auto');
 })();
