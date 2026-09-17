@@ -15,6 +15,8 @@
   var tidyBtn = $('tidyBtn');
   var tidyUndoBtn = $('tidyUndoBtn');
   var resizeBar = $('resultsResize');
+  var layoutEl = $('layout');
+  var vsplitEl = $('vsplit');
   var copyBtn = $('copyUnified');
   var historyBtn = $('historyBtn');
   var historyPanel = $('historyPanel');
@@ -474,6 +476,46 @@
     if (t) beginResize(t.clientY);
   }, { passive: false });
   try { var storedH = localStorage.getItem(RESIZE_KEY); if (storedH) results.style.height = storedH; } catch (e) {}
+
+  // ---------- 左右列宽调整 ----------
+  var SPLIT_KEY = 'diffchecker_split';
+  function setSplitPct(pct) {
+    pct = Math.max(25, Math.min(75, pct));
+    layoutEl.style.setProperty('--split', pct + '%');
+  }
+  function vsplitMove(ev) {
+    if (!resizeState) return;
+    var x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - resizeState.rect.left;
+    setSplitPct((x / resizeState.rect.width) * 100);
+  }
+  function vsplitUp() {
+    if (!resizeState || resizeState.mode !== 'vsplit') return;
+    vsplitEl.classList.remove('active');
+    document.removeEventListener('mousemove', vsplitMove);
+    document.removeEventListener('mouseup', vsplitUp);
+    document.removeEventListener('touchmove', vsplitMove);
+    document.removeEventListener('touchend', vsplitUp);
+    try { localStorage.setItem(SPLIT_KEY, layoutEl.style.getPropertyValue('--split') || ''); } catch (e) {}
+    resizeState = null;
+  }
+  vsplitEl.addEventListener('mousedown', function (ev) {
+    ev.preventDefault();
+    vsplitEl.classList.add('active');
+    resizeState = { mode: 'vsplit', rect: layoutEl.getBoundingClientRect() };
+    document.addEventListener('mousemove', vsplitMove);
+    document.addEventListener('mouseup', vsplitUp);
+  });
+  vsplitEl.addEventListener('touchstart', function (ev) {
+    ev.preventDefault();
+    vsplitEl.classList.add('active');
+    resizeState = { mode: 'vsplit', rect: layoutEl.getBoundingClientRect() };
+    document.addEventListener('touchmove', vsplitMove);
+    document.addEventListener('touchend', vsplitUp);
+  }, { passive: false });
+  try {
+    var savedSplit = localStorage.getItem(SPLIT_KEY);
+    if (savedSplit && /^\d+(\.\d+)?%$/.test(savedSplit)) layoutEl.style.setProperty('--split', savedSplit);
+  } catch (e) {}
 
   // ---------- 初始化 ----------
   editorL = CodeMirror.fromTextArea($('leftEd'), { lineNumbers: true, mode: 'text/plain', lineWrapping: true, autofocus: true });

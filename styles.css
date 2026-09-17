@@ -120,9 +120,9 @@ html, body {
 /* 编辑器区 */
 .editors {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  padding: 6px 16px 14px;
+  grid-template-columns: var(--split) 1fr;
+  gap: 0;
+  margin-top: 10px;
 }
 .edpane {
   background: var(--panel);
@@ -132,7 +132,9 @@ html, body {
   height: 300px;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
+.edpane + .edpane { border-left: 2px solid #ccd5e0; }
 .edlabel {
   padding: 6px 10px;
   font-weight: 600;
@@ -140,6 +142,11 @@ html, body {
   color: var(--txt);
   background: #fafbfc;
 }
+/* 原文栏(蓝) / 修改后栏(暖色)：表头与行号列底纹 */
+.editors .edpane:first-child .edlabel,
+.editors .edpane:first-child .CodeMirror-gutters { background: #eef4ff; }
+.editors .edpane:last-child .edlabel,
+.editors .edpane:last-child .CodeMirror-gutters { background: #fff3dd; }
 .edlabel em { font-weight: 400; color: var(--muted); margin-left: 6px; font-style: normal; }
 .edpane .CodeMirror { height: 100%; font-family: var(--mono); font-size: 13px; line-height: 1.55; }
 .edpane .CodeMirror-gutters { border-right: 1px solid var(--border); background: #f8fafc; }
@@ -147,8 +154,14 @@ html, body {
 .edpane .CodeMirror-linenumber { color: var(--line-num); padding: 0 6px 0 4px; }
 
 /* 结果区 */
+.layout {
+  position: relative;
+  margin: 14px 16px;
+  --split: 50%;
+}
+
 .results {
-  margin: 14px 16px 0;
+  margin: 0;
   height: calc((100vh - 380px) / 2);
   min-height: 120px;
   background: var(--panel);
@@ -159,7 +172,7 @@ html, body {
 
 /* 标注区域高度可调整拖拽条 */
 .resize-bar {
-  margin: 0 16px 10px;
+  margin: 0;
   height: 12px;
   border: 1px solid var(--border);
   border-top: none;
@@ -174,12 +187,44 @@ html, body {
 }
 .resize-bar:hover { background: linear-gradient(#e4ecf8, #d7e3f3); }
 .resize-grip { color: #9aa4af; font-size: 11px; letter-spacing: 2px; }
+
+/* 左右列宽调整拖拽条（贯穿标注区与放置区） */
+.vsplit {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--split);
+  width: 12px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+.vsplit::after {
+  content: '';
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: transparent;
+  transition: background .15s;
+}
+.vsplit:hover::after, .vsplit.active::after { background: var(--accent); }
+.vsplit-grip {
+  color: #b6c2cf;
+  font-size: 12px;
+  position: absolute;
+  pointer-events: none;
+}
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: var(--split) 1fr;
   grid-template-rows: auto 1fr;
   height: 100%;
 }
+.grid > * { min-width: 0; }
 .colhead {
   padding: 7px 10px;
   font-weight: 600;
@@ -190,6 +235,11 @@ html, body {
   z-index: 2;
 }
 .colhead + .colhead { border-left: 2px solid #ccd5e0; }
+/* 原文栏 / 修改后栏：颜色底纹区分 */
+.grid > .colhead:nth-child(1) { background: #eef4ff; }
+.grid > .colhead:nth-child(2) { background: #fff3dd; }
+.grid > .grid-body:nth-child(3) .row .ln { background: #eef4ff; }
+.grid > .grid-body:nth-child(4) .row .ln { background: #fff3dd; }
 .colhead em { font-weight: 400; color: var(--muted); margin-left: 6px; font-style: normal; }
 .grid-body {
   overflow: auto;
@@ -217,6 +267,10 @@ html, body {
   border-right: 1px solid var(--border);
   user-select: none;
   height: 1.55em;
+  /* 行号列吸附左侧，横向滚动时保持可见 */
+  position: sticky;
+  left: 0;
+  z-index: 2;
 }
 .row .content {
   flex: 0 0 auto;
@@ -272,7 +326,7 @@ html, body {
   white-space: pre;
 }
 .isign { flex: 0 0 1.4em; text-align: center; user-select: none; }
-.iln { flex: 0 0 3.4em; text-align: right; padding: 0 6px; color: var(--line-num); user-select: none; background: #f8fafc; border-right: 1px solid var(--border); margin-right: 8px; }
+.iln { flex: 0 0 3.4em; text-align: right; padding: 0 6px; color: var(--line-num); user-select: none; background: #f8fafc; border-right: 1px solid var(--border); margin-right: 8px; position: sticky; left: 0; z-index: 2; }
 .icontent { flex: 0 0 auto; padding-right: 16px; }
 .irow.eq, .irow.context { background: #fff; }
 .irow.del { background: var(--del-bg); }
@@ -348,4 +402,5 @@ html, body {
 @media (max-width: 820px) {
   .editors { grid-template-columns: 1fr; }
   .editors .edpane { height: 220px; }
+  .vsplit { display: none; }
 }
