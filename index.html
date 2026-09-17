@@ -30,11 +30,13 @@
 <div class="featurebar">
   <span class="feature-title">功能区</span>
   <button id="tidyBtn" class="btn primary" title="将两侧文本中多余的空格、制表符、换行符与空行统一整理为一行">修整</button>
+  <button id="tidyUndoBtn" class="btn" title="撤销最后一次修整，恢复原文本" hidden>撤销修整</button>
 </div>
 
 <div class="statusbar"><span id="status" role="status" aria-live="polite">在两侧粘贴文本即可自动对比</span><span id="stats" class="stats"></span></div>
 
 <div class="results" id="results"></div>
+<div class="resize-bar" id="resultsResize" title="拖动调整标注区域高度"><span class="resize-grip">⋮⋮⋮</span></div>
 
 <section class="editors">
   <div class="edpane"><div class="edlabel">原文 <em>Original</em></div><textarea id="leftEd" spellcheck="false"></textarea></div>

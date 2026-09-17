@@ -115,6 +115,18 @@ check('修整：清除多余空格/制表符/换行/空行并合并为一行', f
     throw new Error('左侧修整后不应含换行符');
   }
 });
+check('撤销修整恢复原文本', function () {
+  var L = 'a  b\n\n c\n', R = '  x\ty\n';
+  editors[0].setValue(L);
+  editors[1].setValue(R);
+  els['tidyBtn'].dispatch('click');
+  if (els['tidyUndoBtn'].hidden !== false) throw new Error('修整后“撤销修整”按钮应显示');
+  if (editors[0].getValue().indexOf('\n') !== -1) throw new Error('修整后应无换行');
+  els['tidyUndoBtn'].dispatch('click');
+  if (editors[0].getValue() !== L) throw new Error('撤销后左侧未恢复: ' + JSON.stringify(editors[0].getValue()));
+  if (editors[1].getValue() !== R) throw new Error('撤销后右侧未恢复');
+  if (els['tidyUndoBtn'].hidden !== true) throw new Error('撤销后按钮应再次隐藏');
+});
 check('内联视图切换后重新渲染不抛错', function () {
   var grid = Compute.computeDiff({ left: 'a\nb', right: 'a\nX' });
   grid._options = { ignoreCase: false, ignoreEol: true };

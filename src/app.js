@@ -13,6 +13,8 @@
   var viewToggle = $('viewToggle');
   var foldToggle = $('foldToggle');
   var tidyBtn = $('tidyBtn');
+  var tidyUndoBtn = $('tidyUndoBtn');
+  var resizeBar = $('resultsResize');
   var copyBtn = $('copyUnified');
   var historyBtn = $('historyBtn');
   var historyPanel = $('historyPanel');
@@ -35,6 +37,9 @@
   var debounceTimer = null;
   var editorL, editorR;
   var HISTORY_KEY = 'diffchecker_history_v1';
+  var RESIZE_KEY = 'diffchecker_results_h';
+  var tidyBefore = null;    // 修整前的两侧文本快照（用于撤销）
+  var resizeState = null;   // 标注区拖拽调整状态
 
   // ---------- 工具 ----------
   function escHtml(s) {
@@ -339,13 +344,26 @@
   });
 
   tidyBtn.addEventListener('click', function () {
-    var changed = false;
-    [editorL, editorR].forEach(function (ed) {
-      var v = Norm.tidyText(ed.getValue());
-      if (v !== ed.getValue()) { ed.setValue(v); changed = true; }
-    });
-    toast(changed ? '已整理为一行' : '文本无需修整');
+    var left = editorL.getValue(), right = editorR.getValue();
+    var vL = Norm.tidyText(left), vR = Norm.tidyText(right);
+    if (vL === left && vR === right) { toast('文本无需修整'); return; }
+    tidyBefore = { left: left, right: right };   // 快照，供撤销
+    editorL.setValue(vL);
+    editorR.setValue(vR);
+    tidyUndoBtn.hidden = false;
+    toast('已整理为一行，可撤销');
     setTimeout(compare, 0); // setValue 已触发 change，此处兜底确保重算
+  });
+
+  tidyUndoBtn.addEventListener('click', function () {
+    if (!tidyBefore) return;
+    var b = tidyBefore;
+    tidyBefore = null;
+    editorL.setValue(b.left);
+    editorR.setValue(b.right);
+    tidyUndoBtn.hidden = true;
+    toast('已撤销修整');
+    setTimeout(compare, 0);
   });
 
   copyBtn.addEventListener('click', function () {
@@ -426,9 +444,40 @@
     }
   });
 
+  // ---------- 标注区域高度可调 ----------
+  function clampResizeH(h) { return Math.max(110, Math.min(640, h)); }
+  function onResizeMove(ev) {
+    if (!resizeState) return;
+    var y = ev.touches ? ev.touches[0].clientY : ev.clientY;
+    results.style.height = clampResizeH(resizeState.base + (y - resizeState.y)) + 'px';
+  }
+  function onResizeUp() {
+    if (!resizeState) return;
+    document.removeEventListener('mousemove', onResizeMove);
+    document.removeEventListener('mouseup', onResizeUp);
+    document.removeEventListener('touchmove', onResizeMove);
+    document.removeEventListener('touchend', onResizeUp);
+    try { localStorage.setItem(RESIZE_KEY, results.style.height); } catch (e) {}
+    resizeState = null;
+  }
+  function beginResize(startY) {
+    resizeState = { y: startY, base: results.offsetHeight || 280 };
+    document.addEventListener('mousemove', onResizeMove);
+    document.addEventListener('mouseup', onResizeUp);
+    document.addEventListener('touchmove', onResizeMove);
+    document.addEventListener('touchend', onResizeUp);
+  }
+  resizeBar.addEventListener('mousedown', function (ev) { ev.preventDefault(); beginResize(ev.clientY); });
+  resizeBar.addEventListener('touchstart', function (ev) {
+    ev.preventDefault();
+    var t = ev.touches && ev.touches[0];
+    if (t) beginResize(t.clientY);
+  }, { passive: false });
+  try { var storedH = localStorage.getItem(RESIZE_KEY); if (storedH) results.style.height = storedH; } catch (e) {}
+
   // ---------- 初始化 ----------
-  editorL = CodeMirror.fromTextArea($('leftEd'), { lineNumbers: true, mode: 'text/plain', lineWrapping: false, autofocus: true });
-  editorR = CodeMirror.fromTextArea($('rightEd'), { lineNumbers: true, mode: 'text/plain', lineWrapping: false });
+  editorL = CodeMirror.fromTextArea($('leftEd'), { lineNumbers: true, mode: 'text/plain', lineWrapping: true, autofocus: true });
+  editorR = CodeMirror.fromTextArea($('rightEd'), { lineNumbers: true, mode: 'text/plain', lineWrapping: true });
   for (var id in OPT_MAP) $(id).addEventListener('change', scheduleCompare);
   editorL.on('change', scheduleCompare);
   editorR.on('change', scheduleCompare);

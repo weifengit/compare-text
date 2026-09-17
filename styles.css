@@ -90,6 +90,7 @@ html, body {
 }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
 .btn:active { background: #f0f4fa; }
+.btn[hidden] { display: none; }
 
 .statusbar {
   display: flex;
@@ -140,18 +141,39 @@ html, body {
   background: #fafbfc;
 }
 .edlabel em { font-weight: 400; color: var(--muted); margin-left: 6px; font-style: normal; }
-.edpane .CodeMirror { height: 100%; font-family: var(--mono); font-size: 13px; }
+.edpane .CodeMirror { height: 100%; font-family: var(--mono); font-size: 13px; line-height: 1.55; }
+.edpane .CodeMirror-gutters { border-right: 1px solid var(--border); background: #f8fafc; }
+.edpane .CodeMirror-linenumbers { min-width: 3.2em; }
+.edpane .CodeMirror-linenumber { color: var(--line-num); padding: 0 6px 0 4px; }
 
 /* 结果区 */
 .results {
-  margin: 14px 16px 8px;
+  margin: 14px 16px 0;
   height: calc((100vh - 380px) / 2);
   min-height: 120px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 8px 8px 0 0;
   overflow: hidden;
 }
+
+/* 标注区域高度可调整拖拽条 */
+.resize-bar {
+  margin: 0 16px 10px;
+  height: 12px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background: linear-gradient(#f0f4fa, #e6ecf4);
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  touch-action: none;
+}
+.resize-bar:hover { background: linear-gradient(#e4ecf8, #d7e3f3); }
+.resize-grip { color: #9aa4af; font-size: 11px; letter-spacing: 2px; }
 .grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -167,7 +189,7 @@ html, body {
   top: 0;
   z-index: 2;
 }
-.colhead + .colhead { border-left: 1px solid var(--border); }
+.colhead + .colhead { border-left: 2px solid #ccd5e0; }
 .colhead em { font-weight: 400; color: var(--muted); margin-left: 6px; font-style: normal; }
 .grid-body {
   overflow: auto;
@@ -176,7 +198,7 @@ html, body {
   line-height: 1.55;
   position: relative;
 }
-.grid-body + .grid-body { border-left: 1px solid var(--border); }
+.grid-body + .grid-body { border-left: 2px solid #ccd5e0; }
 
 .row {
   display: flex;
@@ -188,13 +210,12 @@ html, body {
 .row .ln {
   flex: 0 0 auto;
   width: 3.2em;
-  padding: 0 8px 0 4px;
+  padding: 0 6px 0 4px;
   text-align: right;
   color: var(--line-num);
   background: #f8fafc;
   border-right: 1px solid var(--border);
   user-select: none;
-  margin-right: 8px;
   height: 1.55em;
 }
 .row .content {
