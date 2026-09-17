@@ -13,7 +13,6 @@
   var viewToggle = $('viewToggle');
   var foldToggle = $('foldToggle');
   var tidyBtn = $('tidyBtn');
-  var tidyUndoBtn = $('tidyUndoBtn');
   var resizeBar = $('resultsResize');
   var layoutEl = $('layout');
   var vsplitEl = $('vsplit');
@@ -233,13 +232,39 @@
     reportStats(res);
   }
 
-  function flowHtml(segs) {
-    var h = '';
+  /** 流水视图：按原文实际行拆行（保留行号），每行一段高亮片段 */
+  function flowLineRows(segs) {
+    var rows = [], cur = [], ln = 1;
     for (var i = 0; i < segs.length; i++) {
       var s = segs[i];
-      var cls = s.cls === 'rm' ? 'rm' : s.cls === 'ad' ? 'ad' : 'eq';
-      h += '<span class="hl ' + cls + '">' +
-           escHtml(s.text).replace(/(\r\n|\n|\r)/g, '<br>') + '</span>';
+      var parts = String(s.text).split(/(\r\n|\n|\r)/);
+      for (var p = 0; p < parts.length; p++) {
+        var part = parts[p];
+        if (/^(\r\n|\n|\r)$/.test(part)) {
+          rows.push({ n: ln, segs: cur });
+          cur = [];
+          ln++;
+        } else if (part !== '') {
+          cur.push({ text: part, cls: s.cls });
+        }
+      }
+    }
+    if (cur.length) rows.push({ n: ln, segs: cur });
+    return rows;
+  }
+
+  /** 流水行渲染：左侧行号列 + 内容，与并排视图一致 */
+  function flowRowsHtml(rows) {
+    var h = '';
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var inner = '';
+      for (var j = 0; j < r.segs.length; j++) {
+        var s = r.segs[j];
+        var cls = s.cls === 'rm' ? 'rm' : s.cls === 'ad' ? 'ad' : 'eq';
+        inner += '<span class="hl ' + cls + '">' + escHtml(s.text).replace(/\r/g, '') + '</span>';
+      }
+      h += '<div class="row"><span class="ln">' + r.n + '</span><span class="content">' + inner + '</span></div>';
     }
     return h;
   }
@@ -254,10 +279,10 @@
     }
     results.innerHTML =
       '<div class="grid">' +
-      '<div class="colhead">原文（忽略换行）<em>变化标红</em></div>' +
-      '<div class="colhead">修改后（忽略换行）<em>变化标绿</em></div>' +
-      '<div class="grid-body">' + flowHtml(res.segsL) + '</div>' +
-      '<div class="grid-body">' + flowHtml(res.segsR) + '</div>' +
+      '<div class="colhead">原文（忽略换行）<em>按原行号标注</em></div>' +
+      '<div class="colhead">修改后（忽略换行）<em>按原行号标注</em></div>' +
+      '<div class="grid-body">' + flowRowsHtml(flowLineRows(res.segsL)) + '</div>' +
+      '<div class="grid-body">' + flowRowsHtml(flowLineRows(res.segsR)) + '</div>' +
       '</div>';
     reportStats({ mode: 'flow', addedChars: res.addedChars, removedChars: res.removedChars });
   }
@@ -345,27 +370,40 @@
     }
   });
 
+  // “修整”按钮单键切换：修整 ↔ 撤销修整（切换时改按钮文字与颜色）
+  function setTidyBtnMode(undo) {
+    if (undo) {
+      tidyBtn.textContent = '撤销修整';
+      tidyBtn.classList.remove('primary');
+      tidyBtn.classList.add('revert');
+      tidyBtn.title = '撤销最后一次修整，恢复原文本';
+    } else {
+      tidyBtn.textContent = '修整';
+      tidyBtn.classList.remove('revert');
+      tidyBtn.classList.add('primary');
+      tidyBtn.title = '将两侧文本中多余的空格、制表符、换行符与空行统一整理为一行';
+    }
+  }
   tidyBtn.addEventListener('click', function () {
+    if (tidyBefore) {                      // 处于“撤销修整”态 → 撤销并恢复
+      var b = tidyBefore;
+      tidyBefore = null;
+      editorL.setValue(b.left);
+      editorR.setValue(b.right);
+      setTidyBtnMode(false);
+      toast('已撤销修整');
+      setTimeout(compare, 0);
+      return;
+    }
     var left = editorL.getValue(), right = editorR.getValue();
     var vL = Norm.tidyText(left), vR = Norm.tidyText(right);
     if (vL === left && vR === right) { toast('文本无需修整'); return; }
     tidyBefore = { left: left, right: right };   // 快照，供撤销
     editorL.setValue(vL);
     editorR.setValue(vR);
-    tidyUndoBtn.hidden = false;
+    setTidyBtnMode(true);
     toast('已整理为一行，可撤销');
     setTimeout(compare, 0); // setValue 已触发 change，此处兜底确保重算
-  });
-
-  tidyUndoBtn.addEventListener('click', function () {
-    if (!tidyBefore) return;
-    var b = tidyBefore;
-    tidyBefore = null;
-    editorL.setValue(b.left);
-    editorR.setValue(b.right);
-    tidyUndoBtn.hidden = true;
-    toast('已撤销修整');
-    setTimeout(compare, 0);
   });
 
   copyBtn.addEventListener('click', function () {
@@ -523,5 +561,6 @@
   for (var id in OPT_MAP) $(id).addEventListener('change', scheduleCompare);
   editorL.on('change', scheduleCompare);
   editorR.on('change', scheduleCompare);
+  setTidyBtnMode(false);
   compare();
 })();

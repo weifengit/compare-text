@@ -83,10 +83,17 @@ check('grid 结果渲染不抛错', function () {
   res._options = { ignoreCase: false, ignoreEol: true };
   workers[0].onmessage({ data: { id: 1, result: res } });
 });
-check('flow 结果渲染不抛错', function () {
+check('flow 结果渲染不抛错且含行号列', function () {
   var res = Compute.computeDiff({ left: '一\n二', right: '一 二', options: { ignoreNewline: true } });
   res._options = { ignoreNewline: true, ignoreCase: false, ignoreEol: true };
-  workers[0].onmessage({ data: { id: 2, result: res } });
+  editors[0].setValue('一\n二');   // 编辑器非空，跳过占位符分支，真正进入 renderFlow
+  editors[1].setValue('一 二');
+  var last = posted[posted.length - 1];
+  if (!last) throw new Error('尚无 worker 消息');
+  workers[0].onmessage({ data: { id: last.id, result: res } }); // 真实 seq，确保真正渲染
+  if (els['results'].innerHTML.indexOf('<span class="ln">') === -1) {
+    throw new Error('flow 模式左右栏应包含行号列');
+  }
 });
 check('折叠行点击（grid）不抛错', function () {
   var grid = Compute.computeDiff({
@@ -115,17 +122,17 @@ check('修整：清除多余空格/制表符/换行/空行并合并为一行', f
     throw new Error('左侧修整后不应含换行符');
   }
 });
-check('撤销修整恢复原文本', function () {
+check('修整按钮一键切换：修整→撤销修整（换字换色）→恢复', function () {
+  if (els['tidyBtn'].textContent !== '修整') els['tidyBtn'].dispatch('click'); // 兜底回到修整态
   var L = 'a  b\n\n c\n', R = '  x\ty\n';
   editors[0].setValue(L);
   editors[1].setValue(R);
   els['tidyBtn'].dispatch('click');
-  if (els['tidyUndoBtn'].hidden !== false) throw new Error('修整后“撤销修整”按钮应显示');
-  if (editors[0].getValue().indexOf('\n') !== -1) throw new Error('修整后应无换行');
-  els['tidyUndoBtn'].dispatch('click');
+  if (els['tidyBtn'].textContent !== '撤销修整') throw new Error('修整后按钮文字应变“撤销修整”，实际 ' + els['tidyBtn'].textContent);
+  els['tidyBtn'].dispatch('click');
+  if (els['tidyBtn'].textContent !== '修整') throw new Error('撤销后按钮应恢复为“修整”');
   if (editors[0].getValue() !== L) throw new Error('撤销后左侧未恢复: ' + JSON.stringify(editors[0].getValue()));
   if (editors[1].getValue() !== R) throw new Error('撤销后右侧未恢复');
-  if (els['tidyUndoBtn'].hidden !== true) throw new Error('撤销后按钮应再次隐藏');
 });
 check('内联视图切换后重新渲染不抛错', function () {
   var grid = Compute.computeDiff({ left: 'a\nb', right: 'a\nX' });
