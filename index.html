@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文本对比 · Text Diff（离线）</title>
+<link rel="stylesheet" href="lib/codemirror.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">文本对比<span class="brand-sub">Text Diff · 离线纯前端</span></div>
+  <div class="opts" role="group" aria-label="忽略选项">
+    <label class="chip" title="比较时忽略大小写"><input type="checkbox" id="optIgnoreCase">忽略大小写</label>
+    <label class="chip" title="统一 CRLF / LF 行结束符"><input type="checkbox" id="optIgnoreEol" checked>忽略CRLF/LF</label>
+    <label class="chip" title="忽略空k、Tab 等所有空白（含行内空格）"><input type="checkbox" id="optIgnoreWhitespace">忽略空格</label>
+    <label class="chip" title="像处理段落一样忽略换行位置差异"><input type="checkbox" id="optIgnoreNewline">忽略换行</label>
+    <label class="chip" title="全角括号、冒号等视为与半角相同"><input type="checkbox" id="optIgnoreWidth">忽略全/半角</label>
+    <label class="chip" title="忽略括号、引号、逗号、句号、分号、百分号等标点差异"><input type="checkbox" id="optIgnorePunct">忽略标点</label>
+  </div>
+  <div class="actions">
+    <button id="viewToggle" class="btn" title="切换并排 / 内联显示方式">内联视图</button>
+    <label class="chip" title="把连续相同的行折叠为一条小结"><input type="checkbox" id="foldToggle" checked>折叠相同行</label>
+    <button id="copyUnified" class="btn" title="复制 unified diff 文本到剪贴板">复制 Unified Diff</button>
+    <button id="historyBtn" class="btn">历史记录 ▾</button>
+  </div>
+</header>
+
+<div class="statusbar"><span id="status" role="status" aria-live="polite">在两侧粘贴文本即可自动对比</span><span id="stats" class="stats"></span></div>
+
+<section class="editors">
+  <div class="edpane"><div class="edlabel">原文 <em>Original</em></div><textarea id="leftEd" spellcheck="false"></textarea></div>
+  <div class="edpane"><div class="edlabel">修改后 <em>Modified</em></div><textarea id="rightEd" spellcheck="false"></textarea></div>
+</section>
+
+<div class="results" id="results"></div>
+
+<div id="historyPanel" class="history-panel hidden"></div>
+
+<script src="lib/codemirror.min.js"></script>
+<script src="lib/diff.min.js"></script>
+<script src="src/normalize.js"></script>
+<script src="src/compute.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>
