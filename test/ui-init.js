@@ -24,11 +24,19 @@ function mkEl(id) {
   };
 }
 var mkEditor = function () {
-  return { getValue: function () { return ''; }, setValue: function () {}, on: function () {} };
+  return {
+    _value: '', _handlers: {},
+    getValue: function () { return this._value; },
+    setValue: function (v) { this._value = v; },
+    on: function (type, fn) { (this._handlers[type] = this._handlers[type] || []).push(fn); },
+    fire: function (type, ev) { (this._handlers[type] || []).forEach(function (f) { f(ev || {}); }); }
+  };
 };
 
 var workers = [];
 var els = {};
+var editors = [];
+var posted = [];   // worker 收到的 {id,payload}
 
 var sandbox = {
   console: console,
@@ -41,8 +49,12 @@ var sandbox = {
   },
   navigator: { clipboard: undefined },
   localStorage: { getItem: function () { return null; }, setItem: function () {}, removeItem: function () {} },
-  CodeMirror: { fromTextArea: function () { return mkEditor(); } },
-  Worker: function () { var w = { onmessage: null, onerror: null, postMessage: function () {} }; workers.push(w); return w; },
+  CodeMirror: { fromTextArea: function () { var ed = mkEditor(); editors.push(ed); return ed; } },
+  Worker: function () {
+    var w = { onmessage: null, onerror: null, postMessage: function (m) { posted.push(m); } };
+    workers.push(w);
+    return w;
+  },
   setTimeout: setTimeout, clearTimeout: clearTimeout,
   // 浏览器主线程真实挂载方式：jsdiff 挂到大写 Diff
   Diff: require('../lib/diff.min.js')
@@ -95,5 +107,50 @@ check('内联视图切换后重新渲染不抛错', function () {
   els['viewToggle'].dispatch('click');   // inline -> side
 });
 
-console.log('\n' + passed + ' passed, ' + failed + ' failed');
-process.exit(failed ? 1 : 0);
+// ---- 端到端：勾选“忽略换行”→ change 事件 → 防抖 → worker 收到 ignoreNewline:true → flow ----
+setTimeout(function () {
+  try {
+    var LEFT = '   我是谁 我是%（）我是。   我是';
+    var RIGHT = '  我是 谁\n我是%()我是.我是';
+    var beforeCount = posted.length;
+    // 填入两段文本并勾选“忽略换行”
+    editors[0].setValue(LEFT);
+    editors[1].setValue(RIGHT);
+    els['optIgnoreCase'].checked = true;
+    els['optIgnoreEol'].checked = true;
+    els['optIgnoreWhitespace'].checked = true;
+    els['optIgnoreNewline'].checked = true;
+    els['optIgnoreWidth'].checked = true;
+    els['optIgnorePunct'].checked = true;
+    editors[0].fire('change');
+    editors[1].fire('change');
+    setTimeout(function () {
+      try {
+        var lastMsg = posted[posted.length - 1];
+        if (!lastMsg) throw new Error('防抖后未向 worker 发送对比请求');
+        if (lastMsg.payload.options.ignoreNewline !== true) {
+          throw new Error('worker 收到的 options.ignoreNewline 应为 true，实际 ' + lastMsg.payload.options.ignoreNewline);
+        }
+        // 用收到的 payload 实际计算结果并喂回 worker.onmessage（走 flow 渲染）
+        var res = Compute.computeDiff(lastMsg.payload);
+        if (res.mode !== 'flow') throw new Error('应进入 flow 模式，实际 ' + res.mode);
+        if (res.removedChars + res.addedChars !== 0) {
+          throw new Error('该文本在忽略换行下应有 0 差异，实际 增' + res.addedChars + ' 删' + res.removedChars);
+        }
+        workers[0].onmessage({ data: { id: lastMsg.id, result: res } }); // flow 渲染路径
+        passed++;
+        console.log('  ok  端到端：勾选忽略换行 → worker 收到 ignoreNewline → flow 且 0 差异');
+      } catch (e) {
+        failed++;
+        console.log('FAIL  端到端忽略换行链路\n      ' + e.message + '\n' + (e.stack || '').split('\n').slice(0, 6).join('\n'));
+      }
+      console.log('\n' + passed + ' passed, ' + failed + ' failed');
+      process.exit(failed ? 1 : 0);
+    }, 600);
+  } catch (e) {
+    failed++;
+    console.log('FAIL  端到端忽略换行链路（外层）\n      ' + e.message);
+    console.log('\n' + passed + ' passed, ' + failed + ' failed');
+    process.exit(1);
+  }
+}, 0);

@@ -251,7 +251,7 @@
       '<div class="grid-body">' + flowHtml(res.segsL) + '</div>' +
       '<div class="grid-body">' + flowHtml(res.segsR) + '</div>' +
       '</div>';
-    reportStats({ modified: 0, added: res.addedChars, removed: res.removedChars, equal: 0 });
+    reportStats({ mode: 'flow', addedChars: res.addedChars, removedChars: res.removedChars });
   }
 
   function renderResult(res) {
