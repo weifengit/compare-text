@@ -12,6 +12,7 @@
   var statsEl = $('stats');
   var viewToggle = $('viewToggle');
   var foldToggle = $('foldToggle');
+  var tidyBtn = $('tidyBtn');
   var copyBtn = $('copyUnified');
   var historyBtn = $('historyBtn');
   var historyPanel = $('historyPanel');
@@ -335,6 +336,16 @@
         if (view === 'inline') renderInline(lastResult); else renderGrid(lastResult);
       }
     }
+  });
+
+  tidyBtn.addEventListener('click', function () {
+    var changed = false;
+    [editorL, editorR].forEach(function (ed) {
+      var v = Norm.tidyText(ed.getValue());
+      if (v !== ed.getValue()) { ed.setValue(v); changed = true; }
+    });
+    toast(changed ? '已整理为一行' : '文本无需修整');
+    setTimeout(compare, 0); // setValue 已触发 change，此处兜底确保重算
   });
 
   copyBtn.addEventListener('click', function () {

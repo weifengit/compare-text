@@ -73,6 +73,17 @@
   }
 
   /**
+   * 修整文本：清除多余空格、换行符、制表符与空行（含内部），
+   * 最终所有文字整理为一行。用于"修整"功能。
+   */
+  function tidyText(text) {
+    return String(text || '')
+      .replace(/\r\n?|\n/g, ' ')   // 换行符（含内部）→ 空格
+      .replace(/[ \t]+/g, ' ')     // 连续空格/制表符 → 单个空格
+      .trim();                     // 行首行尾空白
+  }
+
+  /**
    * 字符流：返回比较流中保留的归一化字符数组。
    * 与 classifySegs 使用同一个 normalizeChar，保证映射一致。
    */
@@ -121,6 +132,7 @@
     normalizeChar: normalizeChar,
     normalizeLine: normalizeLine,
     splitLines: splitLines,
+    tidyText: tidyText,
     charStream: charStream,
     classifySegs: classifySegs
   };

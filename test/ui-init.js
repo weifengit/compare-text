@@ -99,6 +99,22 @@ check('折叠行点击（grid）不抛错', function () {
     target: { closest: function (sel) { return sel === '.fold-row' ? { getAttribute: function () { return '0:3'; } } : null; } }
   });
 });
+check('修整：清除多余空格/制表符/换行/空行并合并为一行', function () {
+  var dirtyL = '  hello\t\tworld  \n\n   \nfoo\nbar\n';
+  var dirtyR = '\n 苹果 , 香蕉  \t \n\n梨子\n\n';
+  editors[0].setValue(dirtyL);
+  editors[1].setValue(dirtyR);
+  els['tidyBtn'].dispatch('click');
+  if (editors[0].getValue() !== 'hello world foo bar') {
+    throw new Error('左侧修整结果异常: ' + JSON.stringify(editors[0].getValue()));
+  }
+  if (editors[1].getValue() !== '苹果 , 香蕉 梨子') {
+    throw new Error('右侧修整结果异常: ' + JSON.stringify(editors[1].getValue()));
+  }
+  if (editors[0].getValue().indexOf('\n') !== -1) {
+    throw new Error('左侧修整后不应含换行符');
+  }
+});
 check('内联视图切换后重新渲染不抛错', function () {
   var grid = Compute.computeDiff({ left: 'a\nb', right: 'a\nX' });
   grid._options = { ignoreCase: false, ignoreEol: true };
