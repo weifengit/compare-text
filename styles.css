@@ -247,6 +247,13 @@ html, body {
 .grid > .colhead:nth-child(2) { background: #fff3dd; }
 .grid > .grid-body:nth-child(3) .row .ln { background: #eef4ff; }
 .grid > .grid-body:nth-child(4) .row .ln { background: #fff3dd; }
+/* 行号列底色延伸覆盖到整列最底部（容器级渐变，行内由 .ln 补齐） */
+.grid > .grid-body:nth-child(3) {
+  background-image: linear-gradient(90deg, #eef4ff 0, #eef4ff 3.2em, transparent 3.2em);
+}
+.grid > .grid-body:nth-child(4) {
+  background-image: linear-gradient(90deg, #fff3dd 0, #fff3dd 3.2em, transparent 3.2em);
+}
 .colhead em { font-weight: 400; color: var(--muted); margin-left: 6px; font-style: normal; }
 .grid-body {
   overflow: auto;
@@ -259,10 +266,10 @@ html, body {
 
 .row {
   display: flex;
-  min-width: 100%;
-  max-width: 100%;
-  width: max-content;
-  white-space: pre;
+  align-items: stretch;
+  width: 100%;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 .row .ln {
   flex: 0 0 auto;
@@ -273,14 +280,14 @@ html, body {
   background: #f8fafc;
   border-right: 1px solid var(--border);
   user-select: none;
-  height: 1.55em;
-  /* 行号列吸附左侧，横向滚动时保持可见 */
+  /* 行号列吸附左侧，横向滚动时保持可见；随行高自动拉伸 */
   position: sticky;
   left: 0;
   z-index: 2;
 }
 .row .content {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
   padding-right: 16px;
 }
 .row.same { background: #fff; }
@@ -330,11 +337,12 @@ html, body {
 .irow {
   display: flex;
   align-items: stretch;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 .isign { flex: 0 0 1.4em; text-align: center; user-select: none; }
 .iln { flex: 0 0 3.4em; text-align: right; padding: 0 6px; color: var(--line-num); user-select: none; background: #f8fafc; border-right: 1px solid var(--border); margin-right: 8px; position: sticky; left: 0; z-index: 2; }
-.icontent { flex: 0 0 auto; padding-right: 16px; }
+.icontent { flex: 1 1 auto; min-width: 0; padding-right: 16px; }
 .irow.eq, .irow.context { background: #fff; }
 .irow.del { background: var(--del-bg); }
 .irow.add { background: var(--add-bg); }
