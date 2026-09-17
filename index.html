@@ -9,39 +9,48 @@
 </head>
 <body>
 
+<div class="app">
 <header class="topbar">
   <div class="brand">文本对比<span class="brand-sub">Text Diff · 离线纯前端</span></div>
-  <div class="opts" role="group" aria-label="忽略选项">
-    <label class="chip" title="比较时忽略大小写"><input type="checkbox" id="optIgnoreCase">忽略大小写</label>
-    <label class="chip" title="统一 CRLF / LF 行结束符"><input type="checkbox" id="optIgnoreEol" checked>忽略CRLF/LF</label>
-    <label class="chip" title="忽略空k、Tab 等所有空白（含行内空格）"><input type="checkbox" id="optIgnoreWhitespace">忽略空格</label>
-    <label class="chip" title="像处理段落一样忽略换行位置差异"><input type="checkbox" id="optIgnoreNewline">忽略换行</label>
-    <label class="chip" title="全角括号、冒号等视为与半角相同"><input type="checkbox" id="optIgnoreWidth">忽略全/半角</label>
-    <label class="chip" title="忽略括号、引号、逗号、句号、分号、百分号等标点差异"><input type="checkbox" id="optIgnorePunct">忽略标点</label>
-  </div>
-  <div class="actions">
+  <button id="sidebarToggle" class="btn tb-toggle" type="button" aria-expanded="true" aria-controls="sidebar" title="展开 / 收起侧边栏">☰</button>
+</header>
+
+<div class="body-row">
+  <aside class="sidebar" id="sidebar" aria-label="工具栏">
+    <div class="sb-title">忽略选项</div>
+    <div role="group" aria-label="忽略选项">
+      <label class="chip" title="比较时忽略大小写"><input type="checkbox" id="optIgnoreCase">忽略大小写</label>
+      <label class="chip" title="统一 CRLF / LF 行结束符"><input type="checkbox" id="optIgnoreEol" checked>忽略CRLF/LF</label>
+      <label class="chip" title="忽略空k、Tab 等所有空白（含行内空格）"><input type="checkbox" id="optIgnoreWhitespace">忽略空格</label>
+      <label class="chip" title="像处理段落一样忽略换行位置差异"><input type="checkbox" id="optIgnoreNewline">忽略换行</label>
+      <label class="chip" title="全角括号、冒号等视为与半角相同"><input type="checkbox" id="optIgnoreWidth">忽略全/半角</label>
+      <label class="chip" title="忽略括号、引号、逗号、句号、分号、百分号等标点差异"><input type="checkbox" id="optIgnorePunct">忽略标点</label>
+    </div>
+
+    <div class="sb-title">视图与操作</div>
     <button id="viewToggle" class="btn" title="切换并排 / 内联显示方式">内联视图</button>
     <label class="chip" title="把连续相同的行折叠为一条小结"><input type="checkbox" id="foldToggle" checked>折叠相同行</label>
     <button id="copyUnified" class="btn" title="复制 unified diff 文本到剪贴板">复制 Unified Diff</button>
     <button id="historyBtn" class="btn">历史记录 ▾</button>
-  </div>
-</header>
 
-<div class="featurebar">
-  <span class="feature-title">功能区</span>
-  <button id="tidyBtn" class="btn primary" title="将两侧文本中多余的空格、制表符、换行符与空行统一整理为一行">修整</button>
+    <div class="sb-title">功能区</div>
+    <button id="tidyBtn" class="btn primary" title="将两侧文本中多余的空格、制表符、换行符与空行统一整理为一行">修整</button>
+  </aside>
+
+  <main class="main">
+    <div class="statusbar"><span id="status" role="status" aria-live="polite">在两侧粘贴文本即可自动对比</span><span id="stats" class="stats"></span></div>
+
+    <div class="layout" id="layout">
+      <div class="results" id="results"></div>
+      <div class="resize-bar" id="resultsResize" title="拖动调整标注区域高度"><span class="resize-grip">⋮⋮⋮</span></div>
+      <section class="editors">
+        <div class="edpane"><div class="edlabel">原文 <em>Original</em></div><textarea id="leftEd" spellcheck="false"></textarea></div>
+        <div class="edpane"><div class="edlabel">修改后 <em>Modified</em></div><textarea id="rightEd" spellcheck="false"></textarea></div>
+      </section>
+      <div class="vsplit" id="vsplit" title="左右拖动调整列宽"><span class="vsplit-grip">⋮</span></div>
+    </div>
+  </main>
 </div>
-
-<div class="statusbar"><span id="status" role="status" aria-live="polite">在两侧粘贴文本即可自动对比</span><span id="stats" class="stats"></span></div>
-
-<div class="layout" id="layout">
-  <div class="results" id="results"></div>
-  <div class="resize-bar" id="resultsResize" title="拖动调整标注区域高度"><span class="resize-grip">⋮⋮⋮</span></div>
-  <section class="editors">
-    <div class="edpane"><div class="edlabel">原文 <em>Original</em></div><textarea id="leftEd" spellcheck="false"></textarea></div>
-    <div class="edpane"><div class="edlabel">修改后 <em>Modified</em></div><textarea id="rightEd" spellcheck="false"></textarea></div>
-  </section>
-  <div class="vsplit" id="vsplit" title="左右拖动调整列宽"><span class="vsplit-grip">⋮</span></div>
 </div>
 
 <div id="historyPanel" class="history-panel hidden"></div>

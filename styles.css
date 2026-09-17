@@ -42,8 +42,7 @@ html, body {
 }
 .brand { font-size: 16px; font-weight: 700; letter-spacing: .2px; }
 .brand-sub { margin-left: 8px; font-size: 12px; font-weight: 400; color: var(--muted); }
-.opts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-left: auto; }
+.topbar .tb-toggle { margin-left: auto; }
 
 .chip {
   display: inline-flex;
@@ -61,16 +60,6 @@ html, body {
 .chip:hover { border-color: var(--accent); }
 .chip input { accent-color: var(--accent); margin: 0; }
 
-/* 功能区（后续功能扩展区） */
-.featurebar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  background: #f0f5ff;
-  border-bottom: 1px solid var(--border);
-}
-.feature-title { color: var(--muted); font-size: 12px; letter-spacing: .5px; }
 .btn.primary {
   background: var(--accent);
   color: #fff;
@@ -98,6 +87,39 @@ html, body {
 .btn:hover { border-color: var(--accent); color: var(--accent); }
 .btn:active { background: #f0f4fa; }
 .btn[hidden] { display: none; }
+
+/* 侧边栏（顶栏控件收纳处，可点击收起） */
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+.body-row { flex: 1; min-height: 0; display: flex; }
+
+.sidebar {
+  flex: 0 0 auto;
+  width: 210px;
+  min-width: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 10px 12px 16px;
+  overflow: hidden;
+  visibility: visible;
+  transition: none;                 /* 初始无动画，避免加载闪烁 */
+}
+.sidebar.collapsed {
+  width: 0;
+  padding: 0;
+  border-right: none;
+  visibility: hidden;               /* 收起时内容不可 Tab 聚焦 */
+}
+/* 首次手动切换时由 JS 加 .anim，此后才有宽度过渡动画 */
+.sidebar.anim { transition: width .2s ease, padding .2s ease, border-color .2s ease; }
+.sidebar.collapsed.anim { transition: width .2s ease, padding .2s ease, border-color .2s ease, visibility 0s linear .2s; }
+
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.sb-title { margin: 14px 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .5px; }
+.sb-title:first-child { margin-top: 0; }
+.sidebar .chip, .sidebar .btn { display: flex; width: 100%; justify-content: flex-start; align-items: center; }
+.sidebar .chip { margin: 0 0 6px; }
+.sidebar .btn  { margin: 0 0 6px; text-align: left; }
 
 .statusbar {
   display: flex;

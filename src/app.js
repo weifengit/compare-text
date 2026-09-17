@@ -19,6 +19,8 @@
   var copyBtn = $('copyUnified');
   var historyBtn = $('historyBtn');
   var historyPanel = $('historyPanel');
+  var sidebarEl = $('sidebar');
+  var sidebarToggle = $('sidebarToggle');
 
   // ---------- 状态 ----------
   var OPT_MAP = {
@@ -41,6 +43,9 @@
   var RESIZE_KEY = 'diffchecker_results_h';
   var tidyBefore = null;    // 修整前的两侧文本快照（用于撤销）
   var resizeState = null;   // 标注区拖拽调整状态
+  var SIDEBAR_KEY = 'diffchecker_sidebar';
+  var sidebarOpen = true;      // 侧边栏实时状态（不读 classList.contains）
+  var sidebarPref = null;      // 持久化的用户偏好；null = 默认展开
 
   // ---------- 工具 ----------
   function escHtml(s) {
@@ -554,6 +559,44 @@
     var savedSplit = localStorage.getItem(SPLIT_KEY);
     if (savedSplit && /^\d+(\.\d+)?%$/.test(savedSplit)) layoutEl.style.setProperty('--split', savedSplit);
   } catch (e) {}
+
+  // ---------- 侧边栏 ----------
+  function isNarrow() {
+    var w = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 0;
+    return w > 0 && w < 900;   // 沙箱无 window → w=0 → false（宽屏）
+  }
+  function applySidebar(open) {                       // 只反映到 DOM，不持久化
+    sidebarOpen = open;
+    sidebarEl.classList.toggle('collapsed', !open);
+    sidebarToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  function queueCmRefresh() {
+    setTimeout(function () {
+      if (editorL && typeof editorL.refresh === 'function') editorL.refresh();
+      if (editorR && typeof editorR.refresh === 'function') editorR.refresh();
+    }, 220);                                          // 在 0.2s 过渡结束后重测宽高
+  }
+  function setSidebar(open) {                         // 用户主动切换：动画 + 持久化
+    sidebarEl.classList.add('anim');
+    applySidebar(open);
+    sidebarPref = open;
+    try { localStorage.setItem(SIDEBAR_KEY, open ? '1' : '0'); } catch (e) {}
+    queueCmRefresh();
+  }
+  function refreshSidebarForViewport() {              // init 与 resize：窄屏收起、宽屏恢复偏好
+    var open = isNarrow() ? false : (sidebarPref === null ? true : sidebarPref);
+    if (open !== sidebarOpen) { applySidebar(open); queueCmRefresh(); }
+  }
+  sidebarToggle.addEventListener('click', function () { setSidebar(!sidebarOpen); });
+  try {
+    var sbSaved = localStorage.getItem(SIDEBAR_KEY);
+    if (sbSaved === '0') sidebarPref = false;
+    else if (sbSaved === '1') sidebarPref = true;
+  } catch (e) {}
+  refreshSidebarForViewport();                        // 先于 CodeMirror 创建，保证初次量宽正确
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('resize', refreshSidebarForViewport);
+  }
 
   // ---------- 初始化 ----------
   editorL = CodeMirror.fromTextArea($('leftEd'), { lineNumbers: true, mode: 'text/plain', lineWrapping: true, autofocus: true });

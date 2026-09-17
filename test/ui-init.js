@@ -8,8 +8,19 @@ var fs = require('fs');
 var path = require('path');
 var vm = require('vm');
 
-function mkClassList() {
-  return { add: function () {}, remove: function () {}, toggle: function () {}, contains: function () { return false; } };
+function mkClassList(seed) {
+  var s = seed ? seed.slice() : [];
+  return {
+    add: function (c) { if (s.indexOf(c) === -1) s.push(c); },
+    remove: function (c) { var i = s.indexOf(c); if (i !== -1) s.splice(i, 1); },
+    toggle: function (c, force) {
+      var on = force === undefined ? s.indexOf(c) === -1 : !!force;
+      if (on) { if (s.indexOf(c) === -1) s.push(c); }
+      else { var i = s.indexOf(c); if (i !== -1) s.splice(i, 1); }
+      return on;
+    },
+    contains: function (c) { return s.indexOf(c) !== -1; }
+  };
 }
 function mkEl(id) {
   return {
@@ -140,6 +151,15 @@ check('内联视图切换后重新渲染不抛错', function () {
   workers[0].onmessage({ data: { id: 4, result: grid } });
   els['viewToggle'].dispatch('click');   // side -> inline
   els['viewToggle'].dispatch('click');   // inline -> side
+});
+check('侧边栏：宽屏沙箱默认展开', function () {
+  if (els['sidebar'].classList.contains('collapsed')) throw new Error('宽屏（无 window）下侧边栏应默认展开');
+});
+check('侧边栏：点击 ☰ 切换收起/展开', function () {
+  els['sidebarToggle'].dispatch('click');
+  if (!els['sidebar'].classList.contains('collapsed')) throw new Error('点击后应收起');
+  els['sidebarToggle'].dispatch('click');
+  if (els['sidebar'].classList.contains('collapsed')) throw new Error('再次点击应展开');
 });
 
 // ---- 端到端：勾选“忽略换行”→ change 事件 → 防抖 → worker 收到 ignoreNewline:true → flow ----
