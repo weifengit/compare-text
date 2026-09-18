@@ -298,6 +298,7 @@
 
   function renderResult(res) {
     lastResult = res;
+    refreshEditorCharMap();              // 编辑区字符对齐表随结果重建（渲染前，供后续滚动互译）
     var isRestore = lastCompareIsRestore;
     if (!isRestore) saveHistoryEntry();
     lastCompareIsRestore = false;
@@ -396,6 +397,7 @@
     ]).then(function (txts) {
       if (my !== pdfAnnSeq) return;                 // 已有更新的标注流程接管
       var tL = txts[0], tR = txts[1];
+      refreshPdfCharMap(tL, tR);                    // 先重建 PDF 字符对齐表（无论标注是否需校正）
       var diffL = hasL && tL != null && tL !== editorL.getValue();
       var diffR = hasR && tR != null && tR !== editorR.getValue();
       if (!diffL && !diffR) return;                 // 编辑器即 PDF 原文：现有标注已正确
@@ -433,6 +435,7 @@
   // ---------- 事件 -------
   function scheduleCompare() {
     if (restoring) return;                       // tab 恢复期间 setValue 触发的 change 不发对比
+    updatePdfMapMatches();                       // 编辑器文本变化 → PDF 表与编辑区是否仍同文本
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(compare, 400);
   }
@@ -610,6 +613,7 @@
     if (tidyBefore) { var tb = tidyBefore.left; tidyBefore.left = tidyBefore.right; tidyBefore.right = tb; }
     if (FilterBar.selectFile) { FilterBar.selectFile('L', pR, true); FilterBar.selectFile('R', pL, true); }
     if (PdfView.swap) PdfView.swap();
+    pdfCharMap = null; updatePdfMapMatches();   // PDF 互换：作废旧字符表，待重算
     updateTabTitle();
     toast('已左右互换');
   }
@@ -631,6 +635,7 @@
     tidyBefore = null;
     setTidyBtnMode(false);
     if (PdfView.clear) PdfView.clear();
+    pdfCharMap = null; updatePdfMapMatches();
     if (FilterBar.setFields) FilterBar.setFields([]);
     toast('已清除');
     compare();
@@ -704,14 +709,25 @@
     raf(function () { refitScheduled = false; refitPageToPdf(); });
   }
 
-  // ---------- PDF 缩放（自动缩放/适应宽度/适应页面/实际大小，互斥高亮） ----------
-  var ZOOM_BTNS = { auto: $('pdfAuto'), width: $('pdfFitW'), page: $('pdfFitP'), actual: $('pdfActual') };
+  // ---------- PDF 缩放（自动缩放/适应宽度/适应页面，互斥高亮） ----------
+  var ZOOM_BTNS = { auto: $('pdfAuto'), width: $('pdfFitW'), page: $('pdfFitP') };
+  var zoomHintEl = $('pdfZoomHint');
+  /** 缩放比例提示：取左（其次右）面板当前实际渲染比例 */
+  function updatePdfZoomHint() {
+    if (!zoomHintEl) return;
+    var s = null;
+    if (PdfView.isLoaded && PdfView.isLoaded('L') && PdfView.getScale) s = PdfView.getScale('L');
+    if (s == null && PdfView.isLoaded && PdfView.isLoaded('R') && PdfView.getScale) s = PdfView.getScale('R');
+    zoomHintEl.textContent = s == null ? '' : Math.round(s * 100) + '%';
+    zoomHintEl.title = s == null ? '' : '当前显示比例 ' + Math.round(s * 100) + '%';
+  }
   function setPdfZoom(mode) {
     for (var m in ZOOM_BTNS) {
       var b = ZOOM_BTNS[m];
       if (b) b.classList.toggle('active', m === mode);
     }
     if (PdfView.setMode) PdfView.setMode(mode);
+    updatePdfZoomHint();
   }
   for (var m in ZOOM_BTNS) {
     (function (mode) {
@@ -719,6 +735,20 @@
       if (b) b.addEventListener('click', function () { setPdfZoom(mode); });
     })(m);
   }
+  // Ctrl+滚轮：仅在“自动缩放”模式下调整缩放比例（拦截，避免触发浏览器页面缩放）
+  function onPdfWheel(ev) {
+    if (!ev || !ev.ctrlKey) return;
+    if (!PdfView.getMode || PdfView.getMode() !== 'auto') return;
+    if (ev.preventDefault) ev.preventDefault();      // 拦截浏览器页面缩放（桩事件无此方法则跳过）
+    var f = PdfView.getZoomFactor ? PdfView.getZoomFactor() : 1;
+    if (PdfView.setZoomFactor) PdfView.setZoomFactor(ev.deltaY < 0 ? f * 1.1 : f / 1.1);
+    updatePdfZoomHint();
+  }
+  ['pdfLeft', 'pdfRight'].forEach(function (id) {
+    var el = $(id);
+    if (el) el.addEventListener('wheel', onPdfWheel, { passive: false });
+  });
+  if (PdfView.setAfterRender) PdfView.setAfterRender(updatePdfZoomHint);   // 每轮渲染完成后刷新提示
 
   // ---------- 对比源：侧边栏路径 + 顶部筛选区 + PDF 面板 ----------
   var SRCPATH_KEY = 'diffchecker_srcpath';
@@ -897,7 +927,7 @@
     var idx = null;                          // 懒构建：重渲染产生新元素 → 新适配器；折叠/滚动不影响索引
     function ensure() { if (!idx) idx = rectIndex(el); return idx; }
     return {
-      side: side,
+      side: side, space: 'text',
       lineAt: function (px) { var e = findByTop(ensure(), px); return e ? e.ls : null; },
       offsetOf: function (line) { var e = findByLine(ensure(), line); return e ? e.top : null; },
       lineH: function (line) { var e = findByLine(ensure(), line); return e ? e.h : null; }
@@ -909,7 +939,7 @@
       return n ? Math.max(1, Math.min(n, Math.round(line))) : 0;
     }
     return {
-      side: side,
+      side: side, space: 'text',
       lineAt: function (px) {
         try { var pos = cm.coordsChar({ left: 0, top: px }, 'local'); return pos ? pos.line + 1 : null; }
         catch (e) { return null; }
@@ -932,18 +962,145 @@
   }
   function pdfPanelAdapter(side) {
     return {
-      side: side,
+      side: side, space: 'pdf',
       lineAt: function (px) { return PdfView.lineAtOffset ? PdfView.lineAtOffset(side, px) : null; },
       offsetOf: function (line) { return PdfView.lineOffset ? PdfView.lineOffset(side, line) : null; },
       lineH: function (line) { return PdfView.lineHeight ? PdfView.lineHeight(side, line) : null; }
     };
   }
 
+  // --- 字符级互译（6 区协同的核心）：把“文本行号”先换算成字符偏移，经对齐锚表互译，
+  // --- 再换回另一侧的行号+行内比例。比纯行级插值更贴近真实内容，修整/重排后仍对齐。
+  // 两张对齐表：
+  //   editorCharMap —— 来自对比结果 charAnchors（编辑器文本坐标系，随对比结果刷新）；
+  //   pdfCharMap    —— 来自 PDF 原文（PDF 坐标系，修整后 PDF↔PDF 依然用它对得准）。
+  var editorCharMap = null;            // { l2r, r2l, texts:{L,R}, lineStarts:{L,R} }
+  var pdfCharMap = null;               // 同上，但基于 PDF 原文
+  var pdfMapSeq = 0;
+  var pdfMapMatchesEditors = false;    // pdfCharMap 与编辑器当前文本一致时，混合跨区（PDF↔编辑）才能用字符级坐标
+
+  /** 文本行号 → 每行起始字符偏移表（1 基行号；文本不含行尾换行的情形也正确） */
+  function lineStartsOf(text) {
+    var starts = [0], i;
+    for (i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+    return starts;
+  }
+  /** 行号+行内比例 → 字符偏移（float，允许落在行中任意字符间） */
+  function lineToChar(starts, textLen, line, frac) {
+    var n = starts.length;
+    var idx = Math.round(line) - 1;
+    if (idx < 0) idx = 0;
+    if (idx > n - 1) idx = n - 1;
+    var end = idx + 1 < n ? starts[idx + 1] : textLen;
+    return starts[idx] + (frac || 0) * Math.max(0, end - starts[idx]);
+  }
+  /** 字符偏移 → { line, frac }（该行号 + 行内比例） */
+  function charToLineFrac(starts, textLen, c) {
+    var lo = 0, hi = starts.length - 1;
+    while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (starts[mid] <= c) lo = mid; else hi = mid - 1; }
+    var end = lo + 1 < starts.length ? starts[lo + 1] : textLen;
+    var len = Math.max(1, end - starts[lo]);
+    return { line: lo + 1, frac: Math.max(0, Math.min(1, (c - starts[lo]) / len)) };
+  }
+  /** 行级互译（同 grid 现有逻辑）：行号经行锚表插值，保留行内比例 */
+  function translateLineMap(map, from, to, line, frac) {
+    var arr = from === 'L' ? map.line.l2r : map.line.r2l;
+    var l = interpAnchor(arr, line);
+    return l == null ? null : { line: l, frac: frac };
+  }
+  /** 字符级互译：行号+行内比例 → 字符偏移 → 锚表 → 另一侧字符偏移 → 行号+行内比例 */
+  function translateCharMap(map, from, to, line, frac) {
+    var srcStarts = map.lineStarts[from], tgtStarts = map.lineStarts[to];
+    var srcText = map.texts[from], tgtText = map.texts[to];
+    var c = lineToChar(srcStarts, srcText.length, line, frac);
+    var arr = from === 'L' ? map.char.l2r : map.char.r2l;
+    var c2 = interpAnchor(arr, c);
+    if (c2 == null) return null;
+    return charToLineFrac(tgtStarts, tgtText.length, c2);
+  }
+  /**
+   * 用对齐表互译：行级覆盖足够（行结构化内容，精确无漂移）优先行级；
+   * 覆盖稀疏（段落重排，行已打散）则退到字符级；行级表存在但覆盖低时仍可作兜底。
+   */
+  function translateWithMap(map, from, to, line, frac) {
+    if (map.line) {
+      if (map.line.coverage >= 0.3) {
+        var r = translateLineMap(map, from, to, line, frac);
+        if (r) return r;
+      } else if (map.char) {
+        var c = translateCharMap(map, from, to, line, frac);
+        if (c) return c;
+      }
+      var r2 = translateLineMap(map, from, to, line, frac);
+      if (r2) return r2;
+    }
+    if (map.char) return translateCharMap(map, from, to, line, frac);
+    return null;
+  }
+  /** 编辑器文本坐标系对齐表（行级+字符级）：随对比结果（lastResult）重建 */
+  function refreshEditorCharMap() {
+    editorCharMap = null;
+    if (!lastResult || lastResult.error || !(lastResult.lineAnchors || lastResult.charAnchors)) return;
+    var tl = editorL.getValue(), tr = editorR.getValue();
+    editorCharMap = {
+      line: lastResult.lineAnchors || null,
+      char: lastResult.charAnchors || null,
+      texts: { L: tl, R: tr },
+      lineStarts: { L: lineStartsOf(tl), R: lineStartsOf(tr) }
+    };
+  }
+  /** 基于 PDF 原文重建对齐表（行级+字符级）。编辑器文本恰为 PDF 原文时复用对比结果表（零额外 diff），否则另算 */
+  function refreshPdfCharMap(tL, tR) {
+    var my = ++pdfMapSeq;
+    pdfCharMap = null;
+    if (tL == null || tR == null) return;
+    var anchors = null;
+    if (lastResult && lastResult.charAnchors && editorL.getValue() === tL && editorR.getValue() === tR) {
+      anchors = { line: lastResult.lineAnchors || null, char: lastResult.charAnchors || null };
+    } else {
+      var r2 = runLocal({ left: tL, right: tR, options: readOptions() });
+      if (my !== pdfMapSeq || r2.error) return;
+      anchors = { line: r2.lineAnchors || null, char: r2.charAnchors || null };
+    }
+    if (my !== pdfMapSeq) return;
+    pdfCharMap = anchors ? {
+      line: anchors.line || null, char: anchors.char || null,
+      texts: { L: tL, R: tR },
+      lineStarts: { L: lineStartsOf(tL), R: lineStartsOf(tR) }
+    } : null;
+    updatePdfMapMatches();
+  }
+  function updatePdfMapMatches() {
+    pdfMapMatchesEditors = !!(pdfCharMap && pdfCharMap.texts.L === editorL.getValue()
+      && pdfCharMap.texts.R === editorR.getValue());
+  }
+
+  function crossTranslate(srcA, oA, anchor) {
+    var from = srcA.side, to = oA.side;
+    var srcPdf = srcA.space === 'pdf', tgtPdf = oA.space === 'pdf';
+    var r;
+    // PDF↔PDF：恒用 PDF 原文表（修整/手工改编辑器后依然对得准 —— 最高优先级）
+    if (srcPdf && tgtPdf && pdfCharMap) {
+      r = translateWithMap(pdfCharMap, from, to, anchor.line, anchor.frac);
+      if (r) return r;
+    }
+    // 编辑↔编辑：用对比结果表（编辑器文本坐标系）
+    if (!srcPdf && !tgtPdf && editorCharMap) {
+      r = translateWithMap(editorCharMap, from, to, anchor.line, anchor.frac);
+      if (r) return r;
+    }
+    // 混合（PDF↔编辑）：仅当编辑器文本与 PDF 原文一致时字符级坐标才成立
+    if ((srcPdf !== tgtPdf) && pdfCharMap && pdfMapMatchesEditors) {
+      r = translateWithMap(pdfCharMap, from, to, anchor.line, anchor.frac);
+      if (r) return r;
+    }
+    // 降级：行级对齐表（grid 行配对），无表则 null → 比例兜底
+    var ac = anchorArrays();
+    var l = interpAnchor(from === 'L' ? ac.l2r : ac.r2l, anchor.line);
+    return l == null ? null : { line: l, frac: anchor.frac };
+  }
   if (SyncScroll && SyncScroll.setTranslator) {
-    SyncScroll.setTranslator(function (fromSide, toSide, line) {
-      var ac = anchorArrays();
-      return interpAnchor(fromSide === 'L' ? ac.l2r : ac.r2l, line);   // flow/无结果 → null → 比例兜底
-    });
+    SyncScroll.setTranslator(function (srcA, oA, anchor) { return crossTranslate(srcA, oA, anchor); });
   }
 
   function rebindScrollSync() {

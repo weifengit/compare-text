@@ -19,8 +19,9 @@
  *  - 无可滚范围(max<=0)的元素跳过。
  *
  * SyncScroll.rebind([el, ...])                       // 重新绑定（旧监听自动解绑）
- * SyncScroll.setAdapter(el, {side,lineAt,offsetOf,lineH})   // 注册内容锚适配器（全部可选）
- * SyncScroll.setTranslator(fn(fromSide,toSide,line))        // 左右行号互译（返回 null → 比例兜底）
+ * SyncScroll.setAdapter(el, {side,lineAt,offsetOf,lineH,space})  // 注册内容锚适配器（全部可选；space:'pdf'|'text'）
+ * SyncScroll.setTranslator(fn(srcA,oA,{line,frac}))  // 左右互译：入参为源/目标适配器与锚；返回
+ *                                                   //   {line,frac}（字符级）/ 行号（行级）/ null → 比例兜底
  */
 (function (root) {
   'use strict';
@@ -70,19 +71,28 @@
     return { line: line, frac: frac };
   }
 
-  /** 目标区应滚到的像素：行号（必要时跨侧互译）→ 像素 + 行内偏移；不可得 → null */
-  function targetOf(oA, srcSide, anchor) {
+  /** 目标区应滚到的像素：行号（必要时跨侧互译，可返回 {line,frac} 达字符级）→ 像素 + 行内偏移；不可得 → null */
+  function targetOf(oA, srcA, anchor) {
     if (!oA || !oA.offsetOf) return null;
-    var line = anchor.line;
+    var line = anchor.line, frac = anchor.frac;
+    var srcSide = srcA ? srcA.side : null;
     if (oA.side && srcSide && oA.side !== srcSide) {
-      line = translator ? translator(srcSide, oA.side, anchor.line) : null;
-      if (line == null) return null;
+      var tr = translator ? translator(srcA, oA, anchor) : null;
+      if (tr == null) return null;
+      if (typeof tr === 'object' && typeof tr.line === 'number') {
+        line = tr.line;
+        if (typeof tr.frac === 'number') frac = tr.frac;
+      } else if (typeof tr === 'number') {
+        line = tr;
+      } else {
+        return null;
+      }
     }
     var off = null, h = null;
     try { off = oA.offsetOf(line); } catch (e) { /* 忽略 */ }
     if (off == null) return null;
     if (oA.lineH) { try { h = oA.lineH(line); } catch (e2) { /* 忽略 */ } }
-    return off + anchor.frac * (h || 0);
+    return off + frac * (h || 0);
   }
 
   function applySync(src) {
@@ -100,7 +110,7 @@
       if (o === src) continue;
       var omax = o.scrollHeight - o.clientHeight;
       if (omax <= 0) continue;                  // 目标元素无可滚范围，跳过
-      var target = anchor ? targetOf(adapterOf(o), srcSide, anchor) : null;
+      var target = anchor ? targetOf(adapterOf(o), srcA, anchor) : null;
       if (target == null) target = ratio * omax;    // 无锚信息 → 比例兜底
       target = Math.max(0, Math.min(omax, target));
       if (Math.abs(o.scrollTop - target) < 0.5) continue;   // 已到位则跳过，终止级联

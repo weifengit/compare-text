@@ -28,6 +28,8 @@
   var panelText = { L: null, R: null };   // 每侧已提取的 PDF 原文缓存（差异标注独立坐标系用，clearPanel 失效）
   var renderGen = { L: 0, R: 0 };         // 每侧渲染代数：renderAll 递增，renderPage 回调据此丢弃过期页面
   var renderTasks = { L: {}, R: {} };     // 每侧每页在途 RenderTask（重绘前取消，避免叠加/残留）
+  var zoomFactor = 1;                     // auto 模式手动缩放系数（Ctrl+滚轮调节，setMode 复位）
+  var afterRender = null;                 // 每轮渲染完成回调（app.js 刷新缩放提示）
   var W = (typeof window !== 'undefined') ? window : null;
 
   /** 2D 矩阵相乘（pdf.js 的 [a,b,c,d,e,f] 形式）。把文本项变换（PDF 空间）变换到页面像素空间：像素 = vp * item */
@@ -77,7 +79,7 @@
    * 每页缩放比例（同一文档同一轮渲染用同一份结果，避免逐页异步渲染时滚动条先后出现、
    * 或各页 MediaBox 尺寸不同导致页面忽大忽小）：
    *  actual=100%；page=整页适配——取所有页中最严格的 scale 统一应用（同 PDF 各页等大）；
-   *  width=适应宽度（逐页 cw/w，天然同宽）；auto=适应宽度但不超过实际大小。
+   *  width=适应宽度（逐页 cw/w，天然同宽）；auto=适应宽度但不超过实际大小，再乘手动缩放系数 zoomFactor。
    */
   function computeScales(p, vp1s) {
     var cw = (p.clientWidth || 600) - 2;
@@ -96,7 +98,7 @@
     return vp1s.map(function (vp1) {
       if (!vp1) return 1;
       var fit = cw / vp1.width;
-      return mode === 'auto' ? Math.min(fit, 1) : Math.max(fit, 0.1);
+      return mode === 'auto' ? Math.min(fit, 1) * zoomFactor : Math.max(fit, 0.1);
     });
   }
 
@@ -171,6 +173,7 @@
         if (!pages[n]) continue;                // 单页失败忽略
         try { renderPage(side, pages[n], scales[n], gen); } catch (e) { /* 忽略 */ }
       }
+      try { if (afterRender) afterRender(side); } catch (e2) { /* 忽略 */ }
     });
   }
 
@@ -199,9 +202,23 @@
 
   function setMode(m) {
     mode = m;
+    zoomFactor = 1;                              // 切换缩放模式即复位手动缩放系数
     ['L', 'R'].forEach(function (s) { if (docs[s]) renderAll(s); });
   }
   function getMode() { return mode; }
+  /** auto 模式手动缩放系数（Ctrl+滚轮调用；clamp 到 [0.1, 4]） */
+  function setZoomFactor(f) {
+    zoomFactor = Math.max(0.1, Math.min(4, f));
+    ['L', 'R'].forEach(function (s) { if (docs[s]) renderAll(s); });
+  }
+  function getZoomFactor() { return zoomFactor; }
+  /** 当前实际渲染缩放（取该侧首个有视口的页；未渲染 → null，供缩放比例提示） */
+  function getScale(side) {
+    var vps = pageVps[side] || [];
+    for (var i = 0; i < vps.length; i++) if (vps[i]) return vps[i].scale;
+    return null;
+  }
+  function setAfterRender(fn) { afterRender = fn; }
 
   /** 列宽等容器尺寸变化后，按当前缩放模式重排已加载文档（不改变 mode） */
   function relayout() {
@@ -612,6 +629,7 @@
   root.PdfView = {
     init: function (els) { panels.L = (els && els.left) || null; panels.R = (els && els.right) || null; },
     load: load, clear: clear, setMode: setMode, getMode: getMode, swap: swap, relayout: relayout,
+    setZoomFactor: setZoomFactor, getZoomFactor: getZoomFactor, getScale: getScale, setAfterRender: setAfterRender,
     getPanel: function (side) { return panels[side] || null; },
     // 仅诊断用：各内部分解状态（正常功能不依赖）
     _debug: function (side) {

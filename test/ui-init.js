@@ -187,16 +187,16 @@ check('折叠行点击（grid）不抛错', function () {
     target: { closest: function (sel) { return sel === '.fold-row' ? { getAttribute: function () { return '0:3'; } } : null; } }
   });
 });
-check('修整：清除多余空格/制表符/换行/空行并合并为一行', function () {
+check('修整：清除全部空白（含字符串内部空格/全角空格）并合并为一行', function () {
   var dirtyL = '  hello\t\tworld  \n\n   \nfoo\nbar\n';
   var dirtyR = '\n 苹果 , 香蕉  \t \n\n梨子\n\n';
   editors[0].setValue(dirtyL);
   editors[1].setValue(dirtyR);
   els['tidyBtn'].dispatch('click');
-  if (editors[0].getValue() !== 'hello world foo bar') {
+  if (editors[0].getValue() !== 'helloworldfoobar') {
     throw new Error('左侧修整结果异常: ' + JSON.stringify(editors[0].getValue()));
   }
-  if (editors[1].getValue() !== '苹果 , 香蕉 梨子') {
+  if (editors[1].getValue() !== '苹果,香蕉梨子') {
     throw new Error('右侧修整结果异常: ' + JSON.stringify(editors[1].getValue()));
   }
   if (editors[0].getValue().indexOf('\n') !== -1) {
@@ -215,7 +215,7 @@ check('修整按钮一键切换：修整→撤销修整（换字换色）→恢�
   if (editors[0].getValue() !== L) throw new Error('撤销后左侧未恢复: ' + JSON.stringify(editors[0].getValue()));
   if (editors[1].getValue() !== R) throw new Error('撤销后右侧未恢复');
 });
-check('PDF 缩放：四个按钮接线且高亮互斥', function () {
+check('PDF 缩放：三个按钮接线且高亮互斥，Ctrl+滚轮自动缩放', function () {
   var Pdf = sandbox.PdfView;
   if (!Pdf || !Pdf.getMode) throw new Error('PdfView 应已加载');
   if (Pdf.getMode() !== 'auto') throw new Error('初始模式应为 auto，实际 ' + Pdf.getMode());
@@ -224,11 +224,20 @@ check('PDF 缩放：四个按钮接线且高亮互斥', function () {
   if (Pdf.getMode() !== 'width') throw new Error('点击适应宽度后模式应变 width');
   if (!els['pdfFitW'].classList.contains('active')) throw new Error('适应宽度按钮应高亮');
   if (els['pdfAuto'].classList.contains('active')) throw new Error('自动缩放应取消高亮');
-  els['pdfActual'].dispatch('click');
-  if (Pdf.getMode() !== 'actual') throw new Error('点击实际大小后模式应变 actual');
+  els['pdfFitP'].dispatch('click');
+  if (Pdf.getMode() !== 'page') throw new Error('点击适应页面后模式应变 page');
   if (els['pdfFitW'].classList.contains('active')) throw new Error('适应宽度应取消高亮');
   els['pdfAuto'].dispatch('click');
   if (Pdf.getMode() !== 'auto') throw new Error('点击自动缩放后模式应变 auto');
+  if (typeof Pdf.getZoomFactor !== 'function') throw new Error('PdfView 应暴露 getZoomFactor');
+  if (Pdf.getZoomFactor() !== 1) throw new Error('自动缩放下缩放系数应为 1，实际 ' + Pdf.getZoomFactor());
+  els['pdfLeft'].dispatch('wheel', { ctrlKey: true, deltaY: -100 });
+  var f1 = Pdf.getZoomFactor();
+  if (!(f1 > 1)) throw new Error('Ctrl+滚轮向上应放大，实际系数 ' + f1);
+  els['pdfLeft'].dispatch('wheel', { ctrlKey: true, deltaY: 100 });
+  if (!(Pdf.getZoomFactor() < f1)) throw new Error('Ctrl+滚轮向下应缩小');
+  els['pdfAuto'].dispatch('click');
+  if (Pdf.getZoomFactor() !== 1) throw new Error('点击自动缩放应复位缩放系数为 1');
 });
 check('点 ＋ 新建空白对比窗口', function () {
   var T = sandbox.Tabs;

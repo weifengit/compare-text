@@ -48,6 +48,88 @@
     return total ? eq / total : 1;
   }
 
+  /**
+   * 带原始偏移的字符流：与 Norm.charStream 完全一致地归一化，但额外记录每个保留字符
+   * 在原文中的起始偏移（供字符级协同滚动构表：字符偏移 → 行号 互译）。
+   * 返回 { kept: [归一化字符], offs: [原始偏移] }，两数组长度相同、一一对应。
+   */
+  function streamWithOffsets(text, o) {
+    var kept = [], offs = [];
+    var i = 0;
+    while (i < text.length) {
+      var code = text.codePointAt(i);
+      var span = code > 0xFFFF ? 2 : 1;
+      var norm = Norm.normalizeChar(text.slice(i, i + span), o);
+      if (norm !== '') { kept.push(norm); offs.push(i); }
+      i += span;
+    }
+    return { kept: kept, offs: offs };
+  }
+
+  /**
+   * 行级对齐锚表：对两侧文本做行 diff，把“相等”行的行号配成锚点对（1 基）。
+   * 行结构化内容（代码、PDF 文本项）行级锚定精确无漂移；段落重排时相等行稀疏。
+   * coverage = 锚定行数 / 较短侧总行数，供调用方判断“行级是否可信”（稀疏 → 改用字符级）。
+   * 零相等行 → null。
+   */
+  function buildLineAnchors(leftText, rightText, o) {
+    var L = Norm.splitLines(leftText), R = Norm.splitLines(rightText);
+    var i;
+    var compL = new Array(L.length), compR = new Array(R.length);
+    for (i = 0; i < L.length; i++) compL[i] = Norm.normalizeLine(L[i], o);
+    for (i = 0; i < R.length; i++) compR[i] = Norm.normalizeLine(R[i], o);
+    var l2r = [], r2l = [];
+    var diffs = Diff.diffArrays(compL, compR);
+    var li = 0, ri = 0, k, n;
+    for (i = 0; i < diffs.length; i++) {
+      var p = diffs[i];
+      n = p.value.length;
+      if (p.added) { ri += n; continue; }
+      if (p.removed) { li += n; continue; }
+      for (k = 0; k < n; k++) {
+        l2r.push([li + k + 1, ri + k + 1]);
+        r2l.push([ri + k + 1, li + k + 1]);
+      }
+      li += n; ri += n;
+    }
+    if (!l2r.length) return null;
+    return { l2r: l2r, r2l: r2l, coverage: l2r.length / Math.max(1, Math.min(L.length, R.length)) };
+  }
+
+  /**
+   * 字符级对齐锚表：对两侧文本做字符 diff，把“相等”字符的原始偏移配成锚点对。
+   * l2r 按左侧偏移升序、r2l 按右侧偏移升序（均严格递增），供 interpAnchor 二分插值。
+   * 文本过大（kept 乘积超限）或零相等字符 → null，调用方降级为行级对齐。
+   */
+  function buildCharAnchors(leftText, rightText, o) {
+    var sL = streamWithOffsets(leftText, o);
+    var sR = streamWithOffsets(rightText, o);
+    if (sL.kept.length * sR.kept.length > PRODUCT_LIMIT) return null;
+    var l2r = [], r2l = [];
+    var diffs = Diff.diffArrays(sL.kept, sR.kept);
+    var iL = 0, iR = 0, i, k, n;
+    for (i = 0; i < diffs.length; i++) {
+      var p = diffs[i];
+      n = p.value.length;
+      if (p.added) { iR += n; continue; }
+      if (p.removed) { iL += n; continue; }
+      for (k = 0; k < n; k++) {
+        l2r.push([sL.offs[iL + k], sR.offs[iR + k]]);
+        r2l.push([sR.offs[iR + k], sL.offs[iL + k]]);
+      }
+      iL += n; iR += n;
+    }
+    return l2r.length ? { l2r: l2r, r2l: r2l } : null;
+  }
+
+  /**
+   * 同时构建行级与字符级锚表（PDF↔PDF 协同滚动用）。返回 { line, char }，两者各自可为 null。
+   * 调用方优先行级（覆盖高时精确），稀疏则用字符级（段落重排场景更平滑）。
+   */
+  function buildAnchors(leftText, rightText, o) {
+    return { line: buildLineAnchors(leftText, rightText, o), char: buildCharAnchors(leftText, rightText, o) };
+  }
+
   /** 字符级 diff：整行文本 → 两边的渲染片段 */
   function diffCharsInLine(textL, textR, o) {
     var keptL = Norm.charStream(textL, o);
@@ -252,21 +334,29 @@
     return out.join('\n');
   }
 
-  /** 忽略换行 → 整篇流水字符 diff（换行归一化为空、不参与比较与高亮） */
+  /** 忽略换行 → 整篇流水字符 diff（换行归一化为空、不参与比较与高亮）。同时产出字符级对齐锚表 charAnchors */
   function computeFlow(leftText, rightText, o) {
-    var keptL = Norm.charStream(leftText, o);
-    var keptR = Norm.charStream(rightText, o);
-    if (keptL.length * keptR.length > PRODUCT_LIMIT) {
+    var sL = streamWithOffsets(leftText, o);
+    var sR = streamWithOffsets(rightText, o);
+    if (sL.kept.length * sR.kept.length > PRODUCT_LIMIT) {
       return { mode: 'flow', skipped: true, leftLen: leftText.length, rightLen: rightText.length };
     }
-    var clsL = [], clsR = [];
-    var diffs = Diff.diffArrays(keptL, keptR);
+    var clsL = [], clsR = [], l2r = [], r2l = [];
+    var diffs = Diff.diffArrays(sL.kept, sR.kept);
+    var iL = 0, iR = 0;
     for (var i = 0; i < diffs.length; i++) {
       var p = diffs[i];
       var k, n = p.value.length;
-      if (p.added) { for (k = 0; k < n; k++) clsR.push('ad'); }
-      else if (p.removed) { for (k = 0; k < n; k++) clsL.push('rm'); }
-      else { for (k = 0; k < n; k++) { clsL.push('eq'); clsR.push('eq'); } }
+      if (p.added) { for (k = 0; k < n; k++) clsR.push('ad'); iR += n; }
+      else if (p.removed) { for (k = 0; k < n; k++) clsL.push('rm'); iL += n; }
+      else {
+        for (k = 0; k < n; k++) {
+          clsL.push('eq'); clsR.push('eq');
+          l2r.push([sL.offs[iL + k], sR.offs[iR + k]]);
+          r2l.push([sR.offs[iR + k], sL.offs[iL + k]]);
+        }
+        iL += n; iR += n;
+      }
     }
     var removedChars = 0, addedChars = 0;
     for (var a = 0; a < clsL.length; a++) if (clsL[a] === 'rm') removedChars++;
@@ -276,7 +366,9 @@
       segsL: Norm.classifySegs(leftText, clsL, o),
       segsR: Norm.classifySegs(rightText, clsR, o),
       removedChars: removedChars,
-      addedChars: addedChars
+      addedChars: addedChars,
+      charAnchors: l2r.length ? { l2r: l2r, r2l: r2l } : null,
+      lineAnchors: buildLineAnchors(leftText, rightText, o)
     };
   }
 
@@ -319,5 +411,8 @@
     };
   }
 
-  return { computeDiff: computeDiff, similarity: similarity };
+  return {
+    computeDiff: computeDiff, similarity: similarity,
+    buildCharAnchors: buildCharAnchors, buildLineAnchors: buildLineAnchors, buildAnchors: buildAnchors
+  };
 });

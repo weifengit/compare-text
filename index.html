@@ -76,10 +76,10 @@
       <div class="resize-bar" id="editorsResize" title="拖动调整编辑区与 PDF 区之间的距离"><span class="resize-grip">⋮⋮⋮</span></div>
       <div class="pdfarea" id="pdfarea">
         <div class="pdf-controls">
-          <button id="pdfAuto" class="btn active" title="自动缩放：适应宽度但不超过实际大小">自动缩放</button>
+          <button id="pdfAuto" class="btn active" title="自动缩放：适应宽度但不超过实际大小；Ctrl+滚轮 手动缩放比例">自动缩放</button>
           <button id="pdfFitW" class="btn" title="适应宽度">适应宽度</button>
           <button id="pdfFitP" class="btn" title="适应整页（宽高都适配）">适应页面</button>
-          <button id="pdfActual" class="btn" title="实际大小 100%">实际大小</button>
+          <span class="pdf-zoom" id="pdfZoomHint"></span>
           <span class="pdf-spacer"></span>
           <button id="pdfFullscreen" class="btn" title="隐藏上方区域，释放空间显示 PDF">全屏</button>
         </div>
