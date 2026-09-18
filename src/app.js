@@ -178,8 +178,9 @@
     return out;
   }
 
-  function cellHtml(ln, content, cls) {
-    return '<div class="row ' + cls + '"><span class="ln">' + ln + '</span><span class="content">' + content + '</span></div>';
+  // data-ls/data-le：该行（或折叠条）覆盖的文本行号区间（1 基），供内容锚定协同滚动定位
+  function cellHtml(ln, content, cls, attrs) {
+    return '<div class="row ' + cls + '"' + (attrs || '') + '><span class="ln">' + ln + '</span><span class="content">' + content + '</span></div>';
   }
 
   var FOLD_LABEL = '行相同内容（点击展开）';
@@ -193,24 +194,26 @@
       if (r.type === 'fold') {
         var lbl = '▶ ' + r.count + ' ' + FOLD_LABEL;
         var fb = '<div class="fold-bar">' + lbl + '</div>';
-        leftBody += '<div class="fold-row" data-key="' + r.key + '">' + fb + '</div>';
-        rightBody += '<div class="fold-row" data-key="' + r.key + '">' + fb + '</div>';
+        leftBody += '<div class="fold-row" data-key="' + r.key + '" data-ls="' + (r.li + 1) + '" data-le="' + (r.li + r.count) + '">' + fb + '</div>';
+        rightBody += '<div class="fold-row" data-key="' + r.key + '" data-ls="' + (r.ri + 1) + '" data-le="' + (r.ri + r.count) + '">' + fb + '</div>';
         continue;
       }
       var lnL = r.li >= 0 ? String(r.li + 1) : '';
       var lnR = r.ri >= 0 ? String(r.ri + 1) : '';
+      var lsL = ' data-ls="' + (r.li + 1) + '"';
+      var lsR = ' data-ls="' + (r.ri + 1) + '"';
       if (r.type === 'equal') {
-        leftBody += cellHtml(lnL, escHtml(L[r.li]), 'same');
-        rightBody += cellHtml(lnR, escHtml(R[r.ri]), 'same');
+        leftBody += cellHtml(lnL, escHtml(L[r.li]), 'same', lsL);
+        rightBody += cellHtml(lnR, escHtml(R[r.ri]), 'same', lsR);
       } else if (r.type === 'change') {
-        leftBody += cellHtml(lnL, segsHtml(r.segL), 'change-l');
-        rightBody += cellHtml(lnR, segsHtml(r.segR), 'change-r');
+        leftBody += cellHtml(lnL, segsHtml(r.segL), 'change-l', lsL);
+        rightBody += cellHtml(lnR, segsHtml(r.segR), 'change-r', lsR);
       } else if (r.type === 'remove') {
-        leftBody += cellHtml(lnL, escHtml(L[r.li]), 'remove');
+        leftBody += cellHtml(lnL, escHtml(L[r.li]), 'remove', lsL);
         rightBody += '<div class="row empty"></div>';
       } else if (r.type === 'add') {
         leftBody += '<div class="row empty"></div>';
-        rightBody += cellHtml(lnR, escHtml(R[r.ri]), 'add');
+        rightBody += cellHtml(lnR, escHtml(R[r.ri]), 'add', lsR);
       }
     }
     results.innerHTML =
@@ -256,7 +259,7 @@
         var cls = s.cls === 'rm' ? 'rm' : s.cls === 'ad' ? 'ad' : 'eq';
         inner += '<span class="hl ' + cls + '">' + escHtml(s.text).replace(/\r/g, '') + '</span>';
       }
-      h += '<div class="row"><span class="ln">' + r.n + '</span><span class="content">' + inner + '</span></div>';
+      h += '<div class="row" data-ls="' + r.n + '"><span class="ln">' + r.n + '</span><span class="content">' + inner + '</span></div>';
     }
     return h;
   }
@@ -695,6 +698,9 @@
   });
 
   // ---------- 跨区域协同滚动（主区域1 标注 / 主区域2 编辑 / 主区域3 PDF） ----------
+  // 内容锚定：6 个滚动区块统一以“文本行号”为坐标系——区域1 行带 data-ls，编辑区行号即文本行号，
+  // PDF 文本项行号与提取文本完全一致。滚动时把驱动区视口顶部换算成锚定行，其余区滚动到同一行；
+  // 左右两侧行号经 diff 对齐表互译。页数/字号/版式差异不影响对照；锚信息缺失时降级比例同步。
   function currentScrollers() {
     var out = [];
     var lb = $('leftBody'), rb = $('rightBody'), ib = $('inline-body');
@@ -708,20 +714,161 @@
     }
     return out;
   }
-  function rebindScrollSync() {
-    if (SyncScroll && SyncScroll.rebind) SyncScroll.rebind(currentScrollers());
+
+  // --- 左右行号互译：grid 结果中 li/ri 同时存在的行作为对齐锚点，线性插值 + 端点斜率1外推 ---
+  var anchorCache = { res: null, l2r: [], r2l: [] };
+  function anchorArrays() {
+    if (anchorCache.res === lastResult) return anchorCache;
+    var l2r = [], r2l = [];
+    if (lastResult && !lastResult.error && lastResult.mode === 'grid' && lastResult.rows) {
+      for (var i = 0; i < lastResult.rows.length; i++) {
+        var r = lastResult.rows[i];
+        if (r.li >= 0 && r.ri >= 0) { l2r.push([r.li + 1, r.ri + 1]); r2l.push([r.ri + 1, r.li + 1]); }
+      }
+    }
+    anchorCache = { res: lastResult, l2r: l2r, r2l: r2l };
+    return anchorCache;
+  }
+  function interpAnchor(arr, line) {
+    if (!arr.length) return null;
+    if (line < arr[0][0]) return line + (arr[0][1] - arr[0][0]);        // 首锚之前：斜率1外推
+    var lo = 0, hi = arr.length - 1;
+    while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (arr[mid][0] <= line) lo = mid; else hi = mid - 1; }
+    var a = arr[lo];
+    if (a[0] === line) return a[1];
+    var b = arr[lo + 1];
+    if (!b) return line + (a[1] - a[0]);                                 // 末锚之后：斜率1外推
+    if (b[0] === a[0]) return a[1];
+    var t = (line - a[0]) / (b[0] - a[0]);
+    return Math.round(a[1] + t * (b[1] - a[1]));
   }
 
-  /** 折叠/展开重渲染：保留原左右列的滚动比例，避免按钮点击后位置与跨区滚动“被重置” */
+  // --- 各区块的 行号↔像素 适配器 ---
+  /** 区域1 标注列：由 DOM 的 data-ls/data-le 构建 [像素top → 行号区间] 索引（rect 法，与定位无关） */
+  function rectIndex(el) {
+    var idx = [];
+    if (!el || !el.children || !el.getBoundingClientRect) return idx;   // 桩环境：空索引 → 比例兜底
+    var base = el.getBoundingClientRect().top;
+    var st = el.scrollTop;
+    var kids = el.children;
+    for (var i = 0; i < kids.length; i++) {
+      var k = kids[i];
+      var ls = k.getAttribute ? +(k.getAttribute('data-ls') || 0) : 0;
+      if (!ls) continue;
+      var le = +(k.getAttribute('data-le') || 0) || ls;
+      var r = k.getBoundingClientRect();
+      idx.push({ top: r.top - base + st, ls: ls, le: le, h: r.height });
+    }
+    idx.sort(function (a, b) { return a.top - b.top; });
+    return idx;
+  }
+  function findByTop(idx, px) {              // 最后一个 top<=px 的条目
+    var lo = -1, hi = idx.length - 1;
+    while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (idx[mid].top <= px) lo = mid; else hi = mid - 1; }
+    return lo >= 0 ? idx[lo] : null;
+  }
+  function findByLine(idx, line) {           // ls<=line<=le 的条目，否则之前最近，再否则首条
+    var prev = null;
+    for (var i = 0; i < idx.length; i++) {
+      if (line >= idx[i].ls && line <= idx[i].le) return idx[i];
+      if (idx[i].ls <= line) prev = idx[i];
+      else break;
+    }
+    return prev || idx[0] || null;
+  }
+  function gridBodyAdapter(el, side) {
+    var idx = null;                          // 懒构建：重渲染产生新元素 → 新适配器；折叠/滚动不影响索引
+    function ensure() { if (!idx) idx = rectIndex(el); return idx; }
+    return {
+      side: side,
+      lineAt: function (px) { var e = findByTop(ensure(), px); return e ? e.ls : null; },
+      offsetOf: function (line) { var e = findByLine(ensure(), line); return e ? e.top : null; },
+      lineH: function (line) { var e = findByLine(ensure(), line); return e ? e.h : null; }
+    };
+  }
+  function editorAdapter(cm, side) {
+    function clampLine(line) {
+      var n = cm.lineCount ? cm.lineCount() : 0;
+      return n ? Math.max(1, Math.min(n, Math.round(line))) : 0;
+    }
+    return {
+      side: side,
+      lineAt: function (px) {
+        try { var pos = cm.coordsChar({ left: 0, top: px }, 'local'); return pos ? pos.line + 1 : null; }
+        catch (e) { return null; }
+      },
+      offsetOf: function (line) {
+        try { var l = clampLine(line); return l ? cm.heightAtLine(l - 1, 'local') : null; }
+        catch (e) { return null; }
+      },
+      lineH: function (line) {
+        try {
+          var l = clampLine(line);
+          if (!l) return null;
+          var t = cm.heightAtLine(l - 1, 'local');
+          var n = cm.lineCount();
+          var b = l < n ? cm.heightAtLine(l, 'local') : t + (cm.defaultTextHeight ? cm.defaultTextHeight() : 20);
+          return Math.max(1, b - t);
+        } catch (e) { return null; }
+      }
+    };
+  }
+  function pdfPanelAdapter(side) {
+    return {
+      side: side,
+      lineAt: function (px) { return PdfView.lineAtOffset ? PdfView.lineAtOffset(side, px) : null; },
+      offsetOf: function (line) { return PdfView.lineOffset ? PdfView.lineOffset(side, line) : null; },
+      lineH: function (line) { return PdfView.lineHeight ? PdfView.lineHeight(side, line) : null; }
+    };
+  }
+
+  if (SyncScroll && SyncScroll.setTranslator) {
+    SyncScroll.setTranslator(function (fromSide, toSide, line) {
+      var ac = anchorArrays();
+      return interpAnchor(fromSide === 'L' ? ac.l2r : ac.r2l, line);   // flow/无结果 → null → 比例兜底
+    });
+  }
+
+  function rebindScrollSync() {
+    if (!SyncScroll) return;
+    if (SyncScroll.setAdapter) {
+      var lb = $('leftBody'), rb = $('rightBody');
+      if (lb) SyncScroll.setAdapter(lb, gridBodyAdapter(lb, 'L'));
+      if (rb) SyncScroll.setAdapter(rb, gridBodyAdapter(rb, 'R'));
+      if (editorL && editorL.getScrollerElement) SyncScroll.setAdapter(editorL.getScrollerElement(), editorAdapter(editorL, 'L'));
+      if (editorR && editorR.getScrollerElement) SyncScroll.setAdapter(editorR.getScrollerElement(), editorAdapter(editorR, 'R'));
+      if (PdfView.getPanel) {
+        ['L', 'R'].forEach(function (s) { var p = PdfView.getPanel(s); if (p) SyncScroll.setAdapter(p, pdfPanelAdapter(s)); });
+      }
+    }
+    if (SyncScroll.rebind) SyncScroll.rebind(currentScrollers());
+  }
+
+  /** 折叠/展开重渲染：按锚定行恢复位置（优于比例：折叠增删行后比例已失真，行号不会） */
   function rerenderGridKeepScroll() {
     var lb = $('leftBody');
-    var ratio = (lb && lb.scrollHeight > lb.clientHeight) ? lb.scrollTop / (lb.scrollHeight - lb.clientHeight) : 0;
-    renderGrid(lastResult);                      // 内部会 rebindScrollSync
-    ['leftBody', 'rightBody'].forEach(function (id) {
+    var px = lb ? lb.scrollTop : 0;
+    var e = lb ? findByTop(rectIndex(lb), px) : null;
+    var line = e ? e.ls : null;
+    var dtop = e ? px - e.top : 0;
+    renderGrid(lastResult);                      // 内部 rebindScrollSync（新元素 + 新适配器）
+    var nlb = $('leftBody');
+    if (nlb && line != null) {
+      var ne = findByLine(rectIndex(nlb), line);
+      if (ne) {
+        var max = nlb.scrollHeight - nlb.clientHeight;
+        nlb.scrollTop = Math.max(0, Math.min(max > 0 ? max : 0, ne.top + dtop));   // scroll 事件带动其余五区
+        return;
+      }
+    }
+    ['leftBody', 'rightBody'].forEach(function (id) {   // 锚丢失兜底：比例恢复
       var el = $(id);
       if (!el) return;
-      var max = el.scrollHeight - el.clientHeight;
-      if (max > 0) el.scrollTop = ratio * max;   // 恢复比例；scroll 事件会带动其余区域同步
+      var max2 = el.scrollHeight - el.clientHeight;
+      if (max2 > 0) {
+        var ratio = (lb && lb.scrollHeight > lb.clientHeight) ? px / (lb.scrollHeight - lb.clientHeight) : 0;
+        el.scrollTop = ratio * max2;
+      }
     });
   }
 

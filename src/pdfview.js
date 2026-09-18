@@ -12,6 +12,8 @@
  * PdfView.segmentFields(text) → [{label,text}]     // 按编号/标题行切分章节（字段）
  * PdfView.setHighlight(side,map) / getHighlight(side) // 差异标注：行号→'rm'|'ad' 或 {t:'ch',segs:[{text,cls}]}（字符级）
  * PdfView.isLoaded(side)                            // 该侧是否已加载 PDF
+ * PdfView.lineOffset(side,line) / lineAtOffset(side,px) / lineHeight(side,line)
+ *                                                   // 行号↔滚动像素（内容锚定协同滚动；不可得返回 null）
  */
 (function (root) {
   'use strict';
@@ -439,6 +441,109 @@
   function getHighlight(side) { return highlights[side] || {}; }
   function isLoaded(side) { return !!docs[side]; }
 
+  // ---------- 行号 ↔ 滚动像素（内容锚定协同滚动用：PDF 页数/字号/版式差异不影响行号坐标系） ----------
+
+  /** 页面 wrap 在面板滚动内容中的顶部坐标（rect 法，与 padding/margin/定位无关） */
+  function wrapTopInPanel(p, wrap) {
+    try { return wrap.getBoundingClientRect().top - p.getBoundingClientRect().top + p.scrollTop; }
+    catch (e) { return null; }
+  }
+  function findWrap(p, pageNum) {
+    var kids = p.children || [];
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i]._pageNum === pageNum) return kids[i];
+    }
+    return null;
+  }
+  /** 目标行号的代表文本项：优先精确起始行，否则其后最近项，再否则之前最近项 */
+  function findBox(side, line) {
+    var pages = textItems[side];
+    if (!pages) return null;
+    var prev = null;
+    for (var i = 0; i < pages.length; i++) {
+      var pg = pages[i];
+      for (var j = 0; j < pg.boxes.length; j++) {
+        var b = pg.boxes[j];
+        if (b.line === line) return { page: pg.page, b: b };
+        if (b.line < line) prev = { page: pg.page, b: b };
+        else return { page: pg.page, b: b };
+      }
+    }
+    return prev;
+  }
+  /** 文本项在面板滚动内容中的顶部像素与字身高度 */
+  function boxTopPx(side, pageNum, b) {
+    var vps = pageVps[side] || [];
+    var vp = vps[pageNum - 1];
+    var p = panels[side];
+    if (!vp || !p) return null;
+    var wrap = findWrap(p, pageNum);
+    if (!wrap) return null;
+    var wt = wrapTopInPanel(p, wrap);
+    if (wt == null) return null;
+    var tm = mulMat(vp.transform, b.transform);
+    var fontH = Math.max(1, Math.hypot(tm[2], tm[3]));
+    return { top: wt + (tm[5] - fontH), fontH: fontH };
+  }
+
+  /** 行号 → 该文本行在面板滚动内容中的顶部像素（未加载/未收集/页未渲染 → null，调用方降级比例同步） */
+  function lineOffset(side, line) {
+    if (!panels[side] || !textItems[side]) return null;
+    var f = findBox(side, Math.max(1, Math.round(line)));
+    if (!f) return null;
+    var g = boxTopPx(side, f.page, f.b);
+    return g ? g.top : null;
+  }
+  /** 行号 → 视觉行高（字身×1.2 近似行距；不可得 → null） */
+  function lineHeightAtLine(side, line) {
+    if (!panels[side] || !textItems[side]) return null;
+    var f = findBox(side, Math.max(1, Math.round(line)));
+    if (!f) return null;
+    var g = boxTopPx(side, f.page, f.b);
+    return g ? g.fontH * 1.2 : null;
+  }
+  /** 面板滚动像素 → 该处文本行号（取最后一个基线上沿 ≤ px 的文本项；页无文本回退前页末行） */
+  function lineAtOffset(side, px) {
+    var p = panels[side], pages = textItems[side];
+    if (!p || !pages || !pages.length) return null;
+    var kids = p.children || [];
+    var wrap = null, wtop = 0;
+    for (var i = 0; i < kids.length; i++) {
+      var w = kids[i];
+      if (!w._pageNum) continue;
+      var t = wrapTopInPanel(p, w);
+      if (t == null) return null;
+      if (t <= px && (!wrap || t > wtop)) { wrap = w; wtop = t; }   // 最后一个 top<=px 的页（不依赖追加顺序）
+    }
+    if (!wrap) { var f0 = pages[0].boxes[0]; return f0 ? f0.line : 1; }   // px 在首页之上 → 首行
+    var pg = null;
+    for (i = 0; i < pages.length; i++) {
+      if (pages[i].page === wrap._pageNum) { pg = pages[i]; break; }
+    }
+    if (!pg || !pg.boxes.length) {                    // 该页无文本（图片页等）：回退到之前页的末行
+      var prevLine = pages[0].boxes[0] ? pages[0].boxes[0].line : 1;
+      for (i = 0; i < pages.length; i++) {
+        if (pages[i].page < wrap._pageNum && pages[i].boxes.length) {
+          prevLine = pages[i].boxes[pages[i].boxes.length - 1].line;
+        }
+      }
+      return prevLine;
+    }
+    var vps = pageVps[side] || [];
+    var vp = vps[pg.page - 1];
+    if (!vp) return pg.boxes[0].line;
+    var local = px - wtop;
+    var line = pg.boxes[0].line;
+    for (i = 0; i < pg.boxes.length; i++) {
+      var b = pg.boxes[i];
+      var tm = mulMat(vp.transform, b.transform);
+      var fontH = Math.max(1, Math.hypot(tm[2], tm[3]));
+      if (tm[5] - fontH <= local) line = b.line;      // 取最后一个行顶 ≤ 观察点的项
+      else break;
+    }
+    return line;
+  }
+
   root.PdfView = {
     init: function (els) { panels.L = (els && els.left) || null; panels.R = (els && els.right) || null; },
     load: load, clear: clear, setMode: setMode, getMode: getMode,
@@ -451,6 +556,7 @@
         hl: Object.keys(highlights[side] || {}).length, loadToken: loadSeq[side] };
     },
     extractText: extractText, extractPanel: extractPanel, segmentFields: segmentFields,
-    setHighlight: setHighlight, getHighlight: getHighlight, isLoaded: isLoaded
+    setHighlight: setHighlight, getHighlight: getHighlight, isLoaded: isLoaded,
+    lineOffset: lineOffset, lineAtOffset: lineAtOffset, lineHeight: lineHeightAtLine
   };
 })(typeof self !== 'undefined' ? self : this);

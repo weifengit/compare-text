@@ -160,3 +160,14 @@ PDF的4种视图切换之后，渲染的PDF变成了空白的，看不到内容
 138. PDF 差异标注精确到字符 + 修正垂直覆盖 — 变更行不再整行涂色：updatePdfAnnotations 直接复用 grid 行内字符片段（segL/segR，与区域1 高亮同源），左侧标 rm 片段、右侧标 ad 片段；pdfview 端 segRanges 算行内偏移区间，collectItems 给每文本项补 col（行内起始字符偏移）做区间∩项映射，x 用 canvas measureText 测量并按 PDF 实际项宽归一（测不出时按项宽均摊兜底）。垂直几何改为 [基线-字身, 基线+0.35×字身]，下伸笔画（g/y/p/q）完整覆盖。rm/ad 仍整行涂色。Edge 无头截图实测：'brown'/'Selection' 只框对应单词，下伸笔画在框内（src/pdfview.js、src/app.js）。
 
 139. PDF 两处修复 — ① 拖选蓝色底纹只盖文字上半：.pdf-tl 行盒原为 1em 高被裁掉下伸区，改为盒高=字身×1.35 且 lineHeight=盒高，行盒撑满整盒（[基线-字身, 基线+0.35×字身]，与差异标注框同几何），底纹完整覆盖 g/y/p/q 下伸笔画（Edge 无头程序化选区截图实测）。② PDF 标注未遵循 6 个忽略选项：flow 模式（默认开忽略换行）下 updatePdfAnnotations 原先另算一份强制 ignoreNewline=false 的 grid diff，把换行/重排差异也标进 PDF；改为新增 putFlow 直接把 flow 结果的 segsL/segsR 按行切分为 {t:'rm'|'ad', segs} 标注映射——与区域1 完全同一数据流，6 个忽略按钮对 PDF 标注同步生效（src/pdfview.js、src/app.js；ui-init 新增回归用例，全套 26+25+11+3+5 绿）。
+
+
+
+PDF滚动优化：左右两边可能存在页数不同的情况，还有文字大小布局不同，那么滚动的时候，可能造成对照不同步的情况，请思考一个正确的解决方案，让定位滚动更准确，方便3个主区域共6个区块滚动同步（文字内容的对应才是定位的关键）
+
+140. 内容锚定协同滚动（替代比例同步） — 以“文本行号”为 6 个区块的公共坐标系：① 区域1 渲染行带 data-ls/data-le（grid 行=li/ri+1，折叠条=覆盖区间，flow 行=原行号）；② 编辑区用 CodeMirror coordsChar/heightAtLine 做 行号↔像素；③ pdfview 新增 lineOffset/lineAtOffset/lineHeight（基于 collectItems 文本项行号 + rect 法换算面板滚动像素，页数/字号/版式差异无关）。syncscroll 重写：setAdapter 注册各区块适配器，滚动时驱动区视口顶部 →「锚定行+行内偏移比例」→ 各区滚动到同一行；跨侧（原文↔修改）经 setTranslator 用 diff 对齐行(li,ri) 构表，线性插值+端点斜率1外推互译。无锚信息（flow 跨侧、PDF 未加载、桩环境）自动降级旧比例同步。新增“写入抑制”（程序化写 scrollTop 后 90ms 忽略该元素 scroll 事件）消除行号取整回声抖动；rerenderGridKeepScroll 改为按锚定行恢复（折叠增删行后比例已失真，行号不失真）。E2E 实测（test/e2e-scroll-anchor.js，headless Edge+CDP 驱动真实页面）：左 4 页/字号20/80 行 vs 右 3 页/字号14/85 行（插10删5），滚 PDF 左到行60 → PDF右=65、区域1左右=60/65、编辑区=60；滚区域1右列到行40 → 左列/PDF左/编辑区=30，7 断言全过；单元全套 11+5+3+26+11+1 绿。
+
+
+
+历史记录：我看到限定了高度不合适，导致浪费下面的空间，改为合理的高度，并且我认为“清空全部”按钮应该放在界面可见区域的最底部，中间是历史记录记录，即动态控制中间的高度。
+点击了“修整”按钮之后，PDF中的差异标注就失效了，请修复
