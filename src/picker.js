@@ -98,18 +98,27 @@
     navigate(cur.parent || '');
   }
 
+  /** 加载路径输入框中的路径：浏览其子文件夹（停留在弹层内，未选择） */
+  function onGo() {
+    var p = String((els.path && els.path.value) || '').trim();
+    if (!p) { setErr('请输入文件夹路径'); return; }
+    navigate(p);
+  }
+
   function open() {
     cur = null;
     els.path.value = '';
     setErr('');
     render();
-    els.mask.classList.remove('hidden');
+    els.mask.hidden = false;                    // markup 用 hidden 属性控制显示，须移除属性
+    els.mask.classList.remove('hidden');        // 兜底清理可能残留的 hidden class
     navigate(String((cfg.input && cfg.input.value) || '').trim());
     if (els.path && els.path.focus) els.path.focus();
   }
 
   function close() {
     setErr('');
+    els.mask.hidden = true;
     els.mask.classList.add('hidden');
   }
 
@@ -138,13 +147,14 @@
     if (!els.mask || !els.body || !els.path) return;
     els.up.addEventListener('click', goUp);
     els.path.addEventListener('keydown', function (ev) {
-      if (ev.key === 'Enter') { ev.preventDefault(); confirm(); }
+      if (ev.key === 'Enter') { ev.preventDefault(); onGo(); }   // 与"加载"按钮一致：进入该路径浏览
     });
     els.mask.addEventListener('click', function (ev) { if (ev.target === els.mask) close(); });
     document.addEventListener('keydown', function (ev) {
-      if (ev.key === 'Escape' && !els.mask.classList.contains('hidden')) close();
+      if (ev.key === 'Escape' && !els.mask.hidden) close();
     });
     var bind = function (id, fn) { var b = $(id); if (b) b.addEventListener('click', fn); };
+    bind('pickerGo', onGo);          // “加载”按钮：浏览输入框中的路径
     bind('pickCloseBtn', close);
     bind('pickCancelBtn', close);
     bind('pickOkBtn', confirm);

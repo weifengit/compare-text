@@ -278,9 +278,16 @@ check('对比源：加载路径后 FilterBar 刷新不抛错（fetch 桩）', fu
 });
 check('对比源：点击路径输入框弹出文件夹选择弹层', function () {
   els['srcPathInput'].dispatch('click');
-  if (els['pickerMask'].classList.contains('hidden')) throw new Error('点击输入框应打开弹层');
+  if (els['pickerMask'].hidden !== false) throw new Error('点击输入框应移除 hidden 属性打开弹层，实际=' + els['pickerMask'].hidden);
   els['pickCloseBtn'].dispatch('click');
-  if (!els['pickerMask'].classList.contains('hidden')) throw new Error('关闭后弹层应隐藏');
+  if (els['pickerMask'].hidden !== true) throw new Error('关闭后应重新置 hidden 属性');
+});
+check('文件夹选择：输入路径点击“加载”进入浏览不报错', function () {
+  els['srcPathInput'].dispatch('click');            // 打开弹层
+  els['pickerPath'].value = '/tmp/对比源/子文件夹';
+  els['pickerGo'].dispatch('click');                // 点击“加载”
+  if (!els['pickerErr'].classList.contains('hidden')) throw new Error('加载后不应报错');
+  els['pickCancelBtn'].dispatch('click');           // 关闭，避免影响后续用例
 });
 check('隐藏/显示编辑区按钮切换', function () {
   els['toggleEditorsBtn'].dispatch('click');

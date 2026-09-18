@@ -593,6 +593,7 @@ html, body {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
 }
+.picker-nav .btn { flex: 0 0 auto; margin: 0; }
 .picker-nav input {
   flex: 1;
   min-width: 0;
