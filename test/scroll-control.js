@@ -101,6 +101,21 @@ function topLine(scrollTop) { return Math.round(scrollTop / H) + 1; }
       '目标连续行位 ' + eBefore.toFixed(2) + '→' + eAfter.toFixed(2) + '（未钳制会回到 7）');
   }
 
+  // ---- 层3：大跳完整跟随 —— 源程序化跳回顶部，目标不被弹性钳制卡在半路 ----
+  // 复刻 worklist 145 实测场景：左右都滚到底，右侧（页数多）底部行位 e 更深；
+  // 源单事件从底跳回顶（Δ 245 行 ≥ JUMP_LINES），若仍按 1.25×Δ 钳制则右会被卡在中途。
+  {
+    var mL = mkEl(), mR = mkEl();
+    mL.scrollHeight = 5000; mL.clientHeight = 100;   // 左 max 4900 → 底部行位 e=246
+    mR.scrollHeight = 6300; mR.clientHeight = 100;   // 右 max 6200 → 底部行位 e=311（比左深）
+    rebindPair(mL, mR, function (s, o, e) { return e; });
+    await drive(mL, 4900);                           // 左到底，右跟随到底对应位置
+    mR.scrollTop = 6200;                             // 右被边界滚轮推到自身 max（不派发事件）
+    await drive(mL, 0);                              // 左单事件跳回顶部
+    check('层3：大跳完整跟随（回顶后右也到顶，不卡半路）', Math.abs(mR.scrollTop) <= 1,
+      '右 ' + mR.scrollTop.toFixed(0) + 'px（行 ' + topLine(mR.scrollTop) + '，钳制会卡在 75）');
+  }
+
   // ---- 层4：边界滚轮 —— 源贴边继续滚，目标持续推进到其 max ----
   {
     var mL = mkEl(), mR = mkEl();

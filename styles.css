@@ -295,6 +295,7 @@ html, body {
 .editors .edpane:last-child .CodeMirror-gutters { background: #fff3dd; }
 .edlabel em { font-weight: 400; color: var(--muted); margin-left: 6px; font-style: normal; }
 .edpane .CodeMirror { height: 100%; font-family: var(--mono); font-size: 13px; line-height: 1.55; }
+.edpane .CodeMirror-scroll { overflow-anchor: none; }   /* 禁原生滚动锚定：协同滚动程序化写回不被浏览器反向拉扯 */
 .edpane .CodeMirror-gutters { border-right: 1px solid var(--border); background: #f8fafc; }
 .edpane .CodeMirror-linenumbers { min-width: 3.2em; }
 .edpane .CodeMirror-linenumber { color: var(--line-num); padding: 0 6px 0 4px; }
@@ -341,6 +342,7 @@ html, body {
   height: auto;
   min-height: 0;
   overflow: auto;
+  overflow-anchor: none;   /* 禁原生滚动锚定：协同滚动程序化写 scrollTop，锚定会反着拉回造成抖动 */
   background: #525659;
   padding: 10px;
   position: relative;
@@ -491,6 +493,7 @@ html, body {
 .colhead em { font-weight: 400; color: var(--muted); margin-left: 6px; font-style: normal; }
 .grid-body {
   overflow: auto;
+  overflow-anchor: none;   /* 同上：禁原生滚动锚定，避免与协同滚动程序化写回相互拉扯 */
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.55;

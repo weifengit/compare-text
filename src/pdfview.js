@@ -621,6 +621,15 @@
     if (i < 0) return arr[0] ? arr[0].line : 1;
     return arr[i].line;
   }
+  /** 下一行条目的顶部像素（连续行位间隙插值用：行位在 本行顶→下一行顶 间线性，绝不越过下一行，
+   *  消除页间/大空白区行位不单调导致的抖动；末行 → null → 末端按行高外推，供边界虚拟位置驱动） */
+  function nextLineOffset(side, line) {
+    var arr = posIndexOf(side);
+    if (!arr) return null;
+    var i = idxAtLine(arr, line);
+    if (i < 0) i = 0;
+    return (i + 1 < arr.length) ? arr[i + 1].top : null;
+  }
 
   root.PdfView = {
     init: function (els) { panels.L = (els && els.left) || null; panels.R = (els && els.right) || null; },
@@ -636,6 +645,7 @@
     },
     extractText: extractText, extractPanel: extractPanel, getPanelText: getPanelText, segmentFields: segmentFields,
     setHighlight: setHighlight, getHighlight: getHighlight, isLoaded: isLoaded,
-    lineOffset: lineOffset, lineAtOffset: lineAtOffset, lineHeight: lineHeightAtLine
+    lineOffset: lineOffset, lineAtOffset: lineAtOffset, lineHeight: lineHeightAtLine,
+    nextLineOffset: nextLineOffset
   };
 })(typeof self !== 'undefined' ? self : this);

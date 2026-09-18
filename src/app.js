@@ -635,6 +635,7 @@
     tidyBefore = null;
     setTidyBtnMode(false);
     if (PdfView.clear) PdfView.clear();
+    updatePdfArea();                             // 清除后无 PDF → 隐藏主区域3
     pdfCharMap = null; updatePdfMapMatches();
     if (FilterBar.setFields) FilterBar.setFields([]);
     toast('已清除');
@@ -689,8 +690,18 @@
   // .pdfarea 有 65vh 上限：内容不足以撑满视口时，.layout 会在 PDF 下方留出空档，
   // 侧边栏（含“清空全部”按钮）随之低于 PDF 底边。此处把页面高度收缩到 PDF 底边：
   // 空档消失，侧边栏底=清空按钮底=PDF 区底；历史记录列表 flex:1+overflow:auto 内部滚动。
+  // 主区域3（PDF 显示区 + 缩放控件）仅在至少一侧已加载 PDF 时显示；
+  // 未选文件/对比源未加载/两侧均为非 PDF 时隐藏（PDF 区没有可显示内容）。
+  // 仅切换主区域3 显隐；不在此处重排页面高度：PDF 渲染是异步的，此时 refit 会量到
+  // 未就绪的 pdfarea 高度而把 appEl 永久缩矮（“清空全部”被侧边栏 overflow:hidden 裁掉）。
+  // 自然布局在显示后自动对齐（同 HEAD 行为）；resize/拖拽/折叠等已有调用点负责显式重排。
+  function updatePdfArea() {
+    var hasPdf = !!(PdfView.isLoaded && (PdfView.isLoaded('L') || PdfView.isLoaded('R')));
+    pdfareaEl.classList.toggle('hidden', !hasPdf);
+  }
   function refitPageToPdf() {
     if (pdfFocus) return;                            // 全屏模式 PDF 不限高，无空档
+    if (pdfareaEl.classList.contains('hidden')) return;  // 主区域3 隐藏：无 PDF 底边可对齐
     if (!layoutEl.getBoundingClientRect || !pdfareaEl.getBoundingClientRect) return;  // 桩环境
     appEl.style.minHeight = '';                      // 先还原自然布局（min-height:100vh 撑满视口）再量
     appEl.style.height = '';
@@ -748,7 +759,7 @@
     var el = $(id);
     if (el) el.addEventListener('wheel', onPdfWheel, { passive: false });
   });
-  if (PdfView.setAfterRender) PdfView.setAfterRender(updatePdfZoomHint);   // 每轮渲染完成后刷新提示
+  if (PdfView.setAfterRender) PdfView.setAfterRender(function (side) { updatePdfZoomHint(side); updatePdfArea(); });   // 每轮渲染完成后刷新提示 + 同步主区域3 显隐
 
   // ---------- 对比源：侧边栏路径 + 顶部筛选区 + PDF 面板 ----------
   var SRCPATH_KEY = 'diffchecker_srcpath';
@@ -799,6 +810,7 @@
         if (my !== fileSeq[side] || sw !== switchSeq) return;
         if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
         if (PdfView.clear) PdfView.clear(side);
+        updatePdfArea();                         // 非 PDF 文件：该侧无 PDF → 重算主区域3 显隐
       }).catch(function (err) {
         if (my === fileSeq[side] && sw === switchSeq) toast('读取文件失败：' + ((err && err.message) || err), true);
       });
@@ -927,12 +939,21 @@
   function gridBodyAdapter(el, side) {
     var idx = null;                          // 懒构建：重渲染产生新元素 → 新适配器；折叠/滚动不影响索引
     function ensure() { if (!idx) idx = rectIndex(el); return idx; }
+    function entryOf(line) { var e = findByLine(ensure(), line); return e; }
     return {
       side: side, space: 'text',
       lineAt: function (px) { var e = findByTop(ensure(), px); return e ? e.ls : null; },
       // 连续行位：行首像素 + 行内比例 × 行高（lineAt 恒返回行首 → anchorOf 的 frac 即整行比例，往返一致）
-      offsetOf: function (line) { var e = findByLine(ensure(), line); return e ? e.top + (line - e.ls) * e.h : null; },
-      lineH: function (line) { var e = findByLine(ensure(), line); return e ? e.h : null; }
+      offsetOf: function (line) { var e = entryOf(line); return e ? e.top + (line - e.ls) * e.h : null; },
+      lineH: function (line) { var e = entryOf(line); return e ? e.h : null; },
+      // 下一行条目的顶部：间隙（折叠/空行）内行位线性插值不越界，消除行位不单调（worklist 145）
+      nextOffset: function (line) {
+        var e = entryOf(line);
+        if (!e) return null;
+        var arr = ensure();
+        for (var i = 0; i < arr.length; i++) if (arr[i] === e) return (i + 1 < arr.length) ? arr[i + 1].top : null;
+        return null;
+      }
     };
   }
   function editorAdapter(cm, side) {
@@ -968,6 +989,16 @@
           var b = l < n ? cm.heightAtLine(l, 'local') : t + (cm.defaultTextHeight ? cm.defaultTextHeight() : 20);
           return Math.max(1, b - t);
         } catch (e) { return null; }
+      },
+      // 下一行顶部（CodeMirror 行连续，无间隙 → 与 lineH 等价，走公共间隙插值逻辑）
+      nextOffset: function (line) {
+        try {
+          var n = cm.lineCount ? cm.lineCount() : 0;
+          var l = Math.floor(line);
+          if (l < 1) l = 1;
+          if (l >= n) return null;
+          return cm.heightAtLine(l, 'local');
+        } catch (e) { return null; }
       }
     };
   }
@@ -976,7 +1007,8 @@
       side: side, space: 'pdf',
       lineAt: function (px) { return PdfView.lineAtOffset ? PdfView.lineAtOffset(side, px) : null; },
       offsetOf: function (line) { return PdfView.lineOffset ? PdfView.lineOffset(side, line) : null; },
-      lineH: function (line) { return PdfView.lineHeight ? PdfView.lineHeight(side, line) : null; }
+      lineH: function (line) { return PdfView.lineHeight ? PdfView.lineHeight(side, line) : null; },
+      nextOffset: function (line) { return PdfView.nextLineOffset ? PdfView.nextLineOffset(side, line) : null; }
     };
   }
 
@@ -1291,8 +1323,8 @@
             }).catch(function () {});
           }
         }
-        else if (PdfView.clear) PdfView.clear(side);
-      } else if (PdfView.clear) PdfView.clear(side);
+        else if (PdfView.clear) { PdfView.clear(side); updatePdfArea(); }
+      } else if (PdfView.clear) { PdfView.clear(side); updatePdfArea(); }
     }
   }
   function restorePdfFiles(tab) {
@@ -1300,6 +1332,7 @@
     if (!tab.srcRoot && !tab.dir && !tab.fileL && !tab.fileR) {  // 空白 tab：清空选择与 PDF
       if (FilterBar.selectFile) { FilterBar.selectFile('L', '', true); FilterBar.selectFile('R', '', true); }
       if (PdfView.clear) PdfView.clear();
+      updatePdfArea();
       return;
     }
     var chain = (tab.srcRoot && tab.srcRoot !== getSrcRoot() && FilterBar.reload)
@@ -1361,5 +1394,6 @@
   if (Tabs.setActive) Tabs.setActive(firstTab.id);  // → onSwitch → restoreTab（首次空状态渲染）
   setPdfZoom('auto');
   renderHistory();                                 // 侧边栏历史首次渲染
+  updatePdfArea();                                 // 首屏：未加载 PDF → 隐藏主区域3
   queueRefitPage();                                // 首屏：页面高度对齐 PDF 区底部
 })();

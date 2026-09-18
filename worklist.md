@@ -206,7 +206,7 @@ PDF显示模糊不清晰的问题，到底是为何，因为在WPS或者PDF阅�
 
 当没有选择文件（即对比源 未加载时），请隐藏主区域3（PDF显示区和相关的控件），同时也应该做好左侧边栏中历史记录（中间是记录，动态高度），底下是“清空全部”按钮，让这个按钮高度和主区域2的底部对齐
 测试或者修复Bug残留的相关无用文件清理
-
+上面提到的具体的例子，我发现从最后一页的下方往上滚动时，页数多的那个放在右边，在左边的pdf中滚动时，右边那个PDF总在抖动
 
 144. 段落级协同滚动：多层面控制器（卡顿/边界死锁/抖动回弹/页眉跳页）— 五层重构（test/scroll-control.js 单测 8 绿 + test/e2e-scroll-control.js 5 绿；既有滚动锚定 e2e 7 绿、全套单测 11+5+3+26 绿）：
    ① 连续行位坐标系：公共坐标系改连续浮点 e=行号+行内比例。syncscroll anchorOf/targetOf 全程不取整；app.js 翻译链（interpAnchor/translateLineMap/CharMap/WithMap/crossTranslate/lineToChar/charToLineFrac）去掉 Math.round 改线性插值返回浮点，三个适配器 offsetOf 兼容浮点入参。消除双重取整造成的 1 行级跳变抖动。
@@ -217,3 +217,13 @@ PDF显示模糊不清晰的问题，到底是为何，因为在WPS或者PDF阅�
    修复过程发现并修正：元素态原用普通对象作键会坍缩成 "[object Object]" 使 6 区共享同一槽位（lastKnownE/lastTgtE/pendingVirtual 改 Map）；边界滚轮原每轮 max+dy 不累积，改 TTL 内基于上次虚拟位置叠加。
    根因对应：卡顿→⑤；死锁→④；抖动/回弹→①②③；页眉跳页→③（错映射截断）。
    测量方案回应：采用“连续行位+弹性跟随”，比固定 10/20 行更优——固定阈值会误伤滚动条拖拽与页数不同引起的合法错位。
+
+145. 协同滚动真实文件回归（worklist 144 实测补漏）：真实文件（全蝎-广东 vs 全蝎-宁夏，页数左少右多）从最后一页下方往上滚动时右边 PDF 抖动乱窜、重置到顶后小滚右面板却停在中间行。两处根因与修复（test/scroll-control.js 单测 9 绿 + test/e2e-scroll-control.js 5 绿，回归用例“大跳完整跟随”验证：无修复右被卡 75px、修复后到 0px）：
+   ① 页间/大空白区行位不单调：anchorOf 在“本行顶→下一行顶”间原按行高 h 插值，PDF 页间隙/大空白使 frac 越界 → e 反跳、目标乱窜。适配器新增可选 nextOffset(line)（下一行条目顶部像素），行位改为在 [本行顶, 下一行顶] 区间内线性插值并取 min(原frac, 间隙插值) —— 绝不越过下一行；末行无 nextOffset 仍按行高外推（供层4 边界滚轮虚拟位置继续驱动）。实测右轨迹 maxStep（上滚中向前跳动）由 +219px 降至 +2px。
+   ② 大跳被弹性钳制卡半路：源程序化大跳（重置回顶/滚动条/翻页）单事件 Δ 行远超手势步长时，弹性钳制（1.25×源Δ）只放目标走一段，后续事件 Δ≈0 又把目标冻结在中途（实测回顶后右停在行 17）。修复：源单次移动 ≥ JUMP_LINES(10) 行视为大跳，信任翻译直接完整跟随理想行位（钳制仅过滤小滚噪声/错映射），滚动条/翻页大跳完整跟随的既定语义真正落地。边界滚轮单次 Δ 约 3-7 行不受影响。
+   调查纠正：曾误判为 CSS scroll anchoring（overflow-anchor: none）与之对抗，实际为层3 钳制自身；styles.css 的 overflow-anchor: none（.pdf-panel/.grid-body/.CodeMirror-scroll）保留为防御性规则（程序化写 scrollTop 不被浏览器反向拉扯）。
+
+146. 主区域3 显隐 + 侧边栏历史记录布局（无文件时隐藏 PDF 区；历史列表中间弹性高度、清空按钮沉底对齐）。test/e2e-pdf-fixes.js ③ 5/5 绿：
+   ① 隐藏逻辑：updatePdfArea() 依据 PdfView.isLoaded(L/R) 切换 #pdfarea 的 .hidden（display:none），首屏/afterRender/清除/非 PDF 文件/空白 tab 各调用点覆盖。探测验证：启动隐藏→PDF 加载后显示(307px)→清除后再隐藏。
+   ② 侧边栏：.history-list flex:1 1 auto + overflow:auto 中间弹性撑满、min-height:60px；.h-clear 沉底，随 appEl 高度对齐。
+   修复过程发现并修正（回归：主区域3 隐藏改动曾致 ③ 抖动，HEAD 3/3 绿、改动后 5/5 红）：updatePdfArea 原在 hasPdf 时直接 queueRefitPage，而 afterRender 在 PDF 渲染完成即触发、pdfarea 高度尚未就绪（还在 min-height:120px）→ refit 量到偏大 gap 把 appEl 永久缩矮 → 侧边栏 overflow:hidden 裁掉“清空全部”（距底 -349px）。修复：updatePdfArea 只切换显隐、不再重排；显示后自然布局自动对齐（同 HEAD 行为），resize/拖拽/折叠等既有 refit 调用点不受影响。

@@ -47,6 +47,7 @@
   var RATIO = 1.25;      // 目标单步可推进的上限倍数（相对源 Δ 行）
   var MIN_LINES = 0.15;  // 每步最小推进（吸收亚行取整噪声）
   var TOL = 0.2;         // 方向单调容差（允许的小幅回退/前进，吸收取整）
+  var JUMP_LINES = 10;   // 源单次移动超过该行数视为大跳（滚动条/翻页/程序化归位）→ 完整跟随不钳制
   var GESTURE_IDLE = 200;// 手势空闲判定（ms）
   var VIRTUAL_TTL = 200; // 边界虚拟位置有效时长（ms）
 
@@ -63,7 +64,11 @@
 
   // ---------- 层1：连续行位互转 ----------
 
-  /** 元素视口顶部像素 → 连续行位 e（行号 + 行内比例）；不可得 → null */
+  /** 元素视口顶部像素 → 连续行位 e（行号 + 行内比例）；不可得 → null。
+   *  适配器可提供 nextOffset(line)（下一行条目的顶部像素）：
+   *  行位在“本行顶 → 下一行顶”区间内线性插值，绝不越过下一行 —— 消除 PDF 页间/大空白区
+   *  造成的行位不单调（源滚过空白时 e 不应反跳，见 worklist 145 抖动根因）。
+   *  末行无 nextOffset → 按行高外推（供层4 边界滚轮虚拟位置继续驱动）。 */
   function anchorOf(el, a, px) {
     if (!a || !a.lineAt) return null;
     var line = null;
@@ -73,8 +78,18 @@
     if (a.offsetOf) { try { off = a.offsetOf(line); } catch (e2) { /* 忽略 */ } }
     if (a.lineH) { try { h = a.lineH(line); } catch (e3) { /* 忽略 */ } }
     var frac = 0;
-    if (off != null && h > 0) frac = (px - off) / h;
-    return line + frac;
+    if (off != null && h > 0) {
+      frac = (px - off) / h;
+      if (a.nextOffset) {
+        var no = null;
+        try { no = a.nextOffset(line); } catch (e4) { /* 忽略 */ }
+        if (no != null && no > off) {
+          var f2 = (px - off) / (no - off);
+          if (f2 < frac) frac = f2;         // 取更小者：间隙区按下一行顶插值，不越界
+        }
+      }
+    }
+    return line + Math.max(0, frac);
   }
 
   /** 连续行位 e → 目标像素（跨侧经 translator 互译）；不可得 → null */
@@ -120,13 +135,16 @@
     var cur = anchorOf(o, oA, o.scrollTop);
     if (cur == null) { cur = lastTgtE.has(o) ? lastTgtE.get(o) : 0; }
     else { lastTgtE.set(o, cur); }
+    var eIdeal = anchorOf(o, oA, idealPx);
+    if (eIdeal == null) return null;
+    // 大跳（滚动条/翻页/程序化归位）：单次移动远超手势步长，弹性钳制反而把目标
+    // 卡在半路（如重置到顶后右面板停在中间），此时信任源直接完整跟随理想行位。
+    if (Math.abs(srcDelta) >= JUMP_LINES) return eIdeal;
     var step = Math.max(MIN_LINES, Math.abs(srcDelta) * RATIO);
     var lo, hi;
     if (srcDelta > 0) { lo = cur - TOL; hi = cur + step; }          // 下滚：只许小幅回退
     else if (srcDelta < 0) { lo = cur - step; hi = cur + TOL; }     // 上滚：只许小幅前进
     else { lo = cur - TOL; hi = cur + TOL; }
-    var eIdeal = anchorOf(o, oA, idealPx);
-    if (eIdeal == null) return null;
     return Math.max(lo, Math.min(hi, eIdeal));
   }
 
