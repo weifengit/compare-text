@@ -17,3 +17,10 @@ npm-debug.log*
 *.swp
 *.swo
 *~
+
+# Tauri / 打包产物
+dist/
+src-tauri/target/
+src-tauri/gen/
+icon.png
+src-tauri/*

@@ -108,6 +108,16 @@ html, body {
   white-space: nowrap;
 }
 .brand svg { display: block; }
+/* 顶栏“请作者喝茶”链接（最右侧，跳转 GitHub 项目页） */
+.tea-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 12.5px;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+.tea-link:hover { background: #eef4ff; text-decoration: underline; }
 
 .chip {
   display: inline-flex;
@@ -236,6 +246,8 @@ html, body {
 }
 /* 第二行右侧：修整/隐藏编辑区/折叠/清除 */
 .fb-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+/* 原/改 文件下拉之间的左右互换按钮 */
+.fb-swap { padding: 4px 10px; font-size: 15px; line-height: 1.2; align-self: center; }
 .fb-item { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
 .fb-item select {
   padding: 3px 6px;
@@ -348,6 +360,12 @@ html, body {
   font-family: sans-serif;
   user-select: text;
   -webkit-user-select: text;
+}
+/* 选中只画底纹、不描字形（color:transparent）：字形由 canvas 呈现，
+   若选中时再描一遍回退字体的字形，与 canvas 文字亚像素错位即形成“影子” */
+.pdf-text-layer ::selection {
+  background: rgba(31, 111, 235, .28);
+  color: transparent;
 }
 .pdf-hl { position: absolute; pointer-events: none; }
 .pdf-hl.rm { background: rgba(226, 70, 70, .40); }

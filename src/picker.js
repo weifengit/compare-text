@@ -1,7 +1,8 @@
 /**
  * picker.js — 对比源文件夹选择弹层。
  * 职责：点击路径输入框弹出目录浏览器（浏览 / 直达），确认后回填输入框并触发回调。
- * 依赖 serve.js 的 /api/browse；不依赖 app.js / filterbar（低耦合，按需引入）。
+ * 依赖 Source.browse（source-api.js，浏览器模式走 /api/browse，Tauri 模式走 Rust 命令）；
+ * 未引入 source-api.js 时回退直接 fetch /api/browse；不依赖 app.js / filterbar（低耦合，按需引入）。
  * 全局暴露：Picker
  *
  * Picker.init({ input, onPick })
@@ -19,6 +20,8 @@
   function $(id) { return document.getElementById(id); }
 
   function browse(p) {
+    // 优先 Source.browse（自动适配 Tauri / 浏览器）；未引入时回退 serve.js 的 /api/browse
+    if (root.Source && root.Source.browse) return root.Source.browse(p || '');
     return fetch('/api/browse?path=' + encodeURIComponent(p || ''))
       .then(function (r) { return r.json(); })
       .then(function (d) {

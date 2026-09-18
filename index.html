@@ -21,6 +21,7 @@
     </svg>
     <span>文件对比</span>
   </div>
+  <a class="tea-link" href="https://github.com/weifengit/compare-text" target="_blank" rel="noopener" title="开源项目 · 去 GitHub 项目页看看，欢迎 Star / 请作者喝茶">☕ 请作者喝茶</a>
 </header>
 
 <div class="body-row">
@@ -51,10 +52,11 @@
     <div class="filterbar" id="filterbar">
       <button id="sidebarToggle" class="btn fb-toggle" type="button" aria-expanded="true" aria-controls="sidebar" title="展开 / 收起侧边栏">☰</button>
       <label class="fb-item">子文件夹 <select id="dirSel" title="对比源下的子文件夹"></select></label>
-      <label class="fb-item">字段 <select id="fieldSel" title="点击字段把章节文本复制到左侧编辑区"></select></label>
       <label class="fb-item">原始文件 <select id="fileSelL" title="左侧（原文）文件"></select></label>
+      <button id="swapBtn" class="btn fb-swap" type="button" title="左右互换：调换左右两侧的文件与内容">⇄</button>
       <label class="fb-item">修改文件 <select id="fileSelR" title="右侧（修改后）文件"></select></label>
       <div class="fb-actions">
+        <button id="resetSplitBtn" class="btn" title="左右拖动调整列宽后，点击恢复左右两区等宽">重置居中</button>
         <button id="tidyBtn" class="btn primary" title="将两侧文本中多余的空格、制表符、换行符与空行统一整理为一行">修整</button>
         <button id="toggleEditorsBtn" class="btn" title="隐藏 / 显示主区域2（编辑区）">隐藏编辑区</button>
         <button id="foldBtn" class="btn" title="折叠 / 展开连续相同的行">折叠相同行</button>
@@ -86,7 +88,7 @@
           <div class="pdf-panel" id="pdfRight" title="右侧文件"></div>
         </div>
       </div>
-      <div class="vsplit" id="vsplit" title="左右拖动调整列宽"><span class="vsplit-grip">⋮</span></div>
+      <div class="vsplit" id="vsplit" title="左右拖动调整列宽（双击恢复等宽）"><span class="vsplit-grip">⋮</span></div>
     </div>
   </main>
 </div>

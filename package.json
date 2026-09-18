@@ -1,0 +1,15 @@
+{
+  "name": "compare-text",
+  "version": "1.0.0",
+  "private": true,
+  "description": "离线文本对比工具（浏览器 / Tauri 桌面双模式）",
+  "scripts": {
+    "start": "node serve.js",
+    "test": "node test/smoke.js && node -e \"require('./test/integration.js')\" && node -e \"require('./test/ui-init.js')\"",
+    "dev:desktop": "tauri dev",
+    "build:desktop": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

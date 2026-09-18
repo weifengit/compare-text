@@ -28,6 +28,9 @@
   var srcPathInput = $('srcPathInput');
   var srcLoadBtn = $('srcLoadBtn');
   var srcPathCur = $('srcPathCur');
+  var pdfareaEl = $('pdfarea');
+  var swapBtn = $('swapBtn');
+  var resetSplitBtn = $('resetSplitBtn');
 
   // ---------- 状态 ----------
   var OPT_MAP = {
@@ -62,6 +65,15 @@
   // ---------- 工具 ----------
   function escHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function baseName(p) {
+    var parts = String(p || '').split(/[\\/]/);
+    return parts[parts.length - 1] || '';
+  }
+  function stripExt(n) { return String(n || '').replace(/\.[A-Za-z0-9]{1,8}$/, ''); }
+  function abbrev(s, n) {
+    s = String(s || '');
+    return s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s;
   }
   function readOptions() {
     var o = {};
@@ -286,10 +298,12 @@
 
   function renderResult(res) {
     lastResult = res;
-    if (!lastCompareIsRestore) saveHistoryEntry();
+    var isRestore = lastCompareIsRestore;
+    if (!isRestore) saveHistoryEntry();
     lastCompareIsRestore = false;
     setBusy(false);
     renderHistory();                       // 侧边栏历史随每次对比刷新
+    if (!isRestore) updateTabTitle();      // tab 标题随对比对象更新（恢复 tab 时保留其已有标题）
     if (res.error) { results.innerHTML = ''; reportStats(null); updatePdfAnnotations(null); rebindScrollSync(); return; }
     if (editorL.getValue() === '' && editorR.getValue() === '') {
       results.innerHTML = '<div class="placeholder">在两侧粘贴文本，即可自动开始对比</div>';
@@ -516,6 +530,7 @@
     if (!resizeState || resizeState.mode !== 'results') return;
     var y = ev.touches ? ev.touches[0].clientY : ev.clientY;
     results.style.height = clampResizeH(resizeState.base + (y - resizeState.y)) + 'px';
+    queueRefitPage();
   }
   function onResizeUp() {
     if (!resizeState || resizeState.mode !== 'results') return;
@@ -560,6 +575,7 @@
     document.removeEventListener('touchmove', vsplitMove);
     document.removeEventListener('touchend', vsplitUp);
     try { localStorage.setItem(SPLIT_KEY, layoutEl.style.getPropertyValue('--split') || ''); } catch (e) {}
+    if (PdfView.relayout) PdfView.relayout();   // 列宽变化后按当前缩放模式重排 PDF
     resizeState = null;
   }
   vsplitEl.addEventListener('mousedown', function (ev) {
@@ -581,6 +597,33 @@
     if (savedSplit && /^\d+(\.\d+)?%$/.test(savedSplit)) layoutEl.style.setProperty('--split', savedSplit);
   } catch (e) {}
 
+  // ---------- 左右互换 / 重置居中 ----------
+  // 互换：编辑区文本、文件下拉、PDF 面板（连同其标注/文本项/原文缓存）整体对调；
+  // 修整快照同步对调，保证“撤销修整”仍恢复到对应侧。不重新读盘，互换即时完成。
+  function swapSides() {
+    var pL = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
+    var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
+    var tL = editorL.getValue(), tR = editorR.getValue();
+    fileSeq.L++; fileSeq.R++;                 // 作废旧侧在途加载，防止其回填覆盖互换结果
+    editorL.setValue(tR);
+    editorR.setValue(tL);
+    if (tidyBefore) { var tb = tidyBefore.left; tidyBefore.left = tidyBefore.right; tidyBefore.right = tb; }
+    if (FilterBar.selectFile) { FilterBar.selectFile('L', pR, true); FilterBar.selectFile('R', pL, true); }
+    if (PdfView.swap) PdfView.swap();
+    updateTabTitle();
+    toast('已左右互换');
+  }
+  if (swapBtn) swapBtn.addEventListener('click', swapSides);
+  // 重置居中：列宽恢复 50%（双击拖动条同效），PDF 按新列宽重排
+  function resetSplit() {
+    setSplitPct(50);
+    try { localStorage.removeItem(SPLIT_KEY); } catch (e) {}
+    if (PdfView.relayout) PdfView.relayout();
+    toast('已恢复左右等宽');
+  }
+  if (resetSplitBtn) resetSplitBtn.addEventListener('click', resetSplit);
+  vsplitEl.addEventListener('dblclick', resetSplit);
+
   // ---------- 清除 ----------
   clearBtn.addEventListener('click', function () {
     editorL.setValue('');
@@ -601,6 +644,7 @@
     if (!edResizeState) return;
     var y = ev.touches ? ev.touches[0].clientY : ev.clientY;
     editorsEl.style.height = clampEdH(edResizeState.base + (y - edResizeState.y)) + 'px';
+    queueRefitPage();
   }
   function onEdResizeUp() {
     if (!edResizeState) return;
@@ -632,8 +676,33 @@
     pdfFocus = on;
     appEl.classList.toggle('pdf-focus', on);
     pdfFullscreen.textContent = on ? '还原' : '全屏';
+    queueRefitPage();
   }
   pdfFullscreen.addEventListener('click', function () { setPdfFocus(!pdfFocus); });
+
+  // ---------- 页面高度对齐 PDF 区底部 ----------
+  // .pdfarea 有 65vh 上限：内容不足以撑满视口时，.layout 会在 PDF 下方留出空档，
+  // 侧边栏（含“清空全部”按钮）随之低于 PDF 底边。此处把页面高度收缩到 PDF 底边：
+  // 空档消失，侧边栏底=清空按钮底=PDF 区底；历史记录列表 flex:1+overflow:auto 内部滚动。
+  function refitPageToPdf() {
+    if (pdfFocus) return;                            // 全屏模式 PDF 不限高，无空档
+    if (!layoutEl.getBoundingClientRect || !pdfareaEl.getBoundingClientRect) return;  // 桩环境
+    appEl.style.minHeight = '';                      // 先还原自然布局（min-height:100vh 撑满视口）再量
+    appEl.style.height = '';
+    var gap = layoutEl.getBoundingClientRect().bottom - pdfareaEl.getBoundingClientRect().bottom;
+    if (gap > 1) {
+      appEl.style.minHeight = '0';
+      appEl.style.height = Math.max(360, Math.round(appEl.getBoundingClientRect().height - gap)) + 'px';
+    }
+  }
+  var refitScheduled = false;
+  function queueRefitPage() {
+    if (refitScheduled) return;
+    refitScheduled = true;
+    var raf = (typeof requestAnimationFrame === 'function') ? requestAnimationFrame
+      : function (f) { return setTimeout(f, 16); };  // 桩环境无 rAF
+    raf(function () { refitScheduled = false; refitPageToPdf(); });
+  }
 
   // ---------- PDF 缩放（自动缩放/适应宽度/适应页面/实际大小，互斥高亮） ----------
   var ZOOM_BTNS = { auto: $('pdfAuto'), width: $('pdfFitW'), page: $('pdfFitP'), actual: $('pdfActual') };
@@ -675,10 +744,12 @@
   var fileSeq = { L: 0, R: 0 };   // 每侧文件加载令牌：同侧新加载作废旧加载（两侧可并行互不干扰）
   function loadFileToSide(side, absPath) {
     if (!absPath || !Source.fileUrl) return;
-    var url = Source.fileUrl(absPath);
     var sw = switchSeq;                        // 快照：tab 切换作废在途加载
     var my = ++fileSeq[side];
-    if (/\.pdf$/i.test(absPath)) {
+    // fileUrl 返回 Promise（Tauri 模式需先经 Rust 读字节转 Blob URL）
+    Source.fileUrl(absPath).then(function (url) {
+      if (my !== fileSeq[side] || sw !== switchSeq) return;
+      if (/\.pdf$/i.test(absPath)) {
       // 单次取文档：渲染 + 提词复用同一份，提词成功后立即写编辑器
       var load = PdfView.load(side, url, my);
       if (load && load.then) {
@@ -693,7 +764,7 @@
           if (my === fileSeq[side] && sw === switchSeq) toast('加载 PDF 失败：' + ((err && err.message) || err), true);
         });
       }
-    } else {
+      } else {
       fetch(url).then(function (r) { return r.text(); }).then(function (text) {
         if (my !== fileSeq[side] || sw !== switchSeq) return;
         if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
@@ -701,7 +772,10 @@
       }).catch(function (err) {
         if (my === fileSeq[side] && sw === switchSeq) toast('读取文件失败：' + ((err && err.message) || err), true);
       });
-    }
+      }
+    }).catch(function (err) {
+      if (my === fileSeq[side] && sw === switchSeq) toast('读取文件失败：' + ((err && err.message) || err), true);
+    });
   }
   /** 用户切换子文件夹（或加载对比源）后：按当前所选原始/修改文件立即渲染主区域 */
   function onDirChange() {
@@ -731,6 +805,7 @@
     editorsResize.classList.toggle('hidden', h);
     toggleEditorsBtn.textContent = h ? '显示编辑区' : '隐藏编辑区';
     queueCmRefresh();
+    queueRefitPage();
   }
   toggleEditorsBtn.addEventListener('click', function () { setEditorsHidden(!editorsHidden); });
   foldBtn.addEventListener('click', function () {
@@ -949,7 +1024,7 @@
   } catch (e) {}
   refreshSidebarForViewport();                        // 先于 CodeMirror 创建，保证初次量宽正确
   if (typeof window !== 'undefined' && window.addEventListener) {
-    window.addEventListener('resize', refreshSidebarForViewport);
+    window.addEventListener('resize', function () { refreshSidebarForViewport(); queueRefitPage(); });
   }
 
   // ---------- 多标签页（会话切换：每标签保存自己的内容/选项/PDF/源文件） ----------
@@ -980,7 +1055,40 @@
   }
   function currentTab() { var i = activeIndex(); return i < 0 ? null : tabs[i]; }
   function renderTabs() {
-    if (Tabs && Tabs.setList) Tabs.setList(tabs.map(function (t) { return { id: t.id, title: t.title }; }));
+    if (Tabs && Tabs.setList) Tabs.setList(tabs.map(function (t) { return { id: t.id, title: t.title, tip: t.tip }; }));
+  }
+  // tab 标题取真实对比对象：优先两个文件名（精简显示、tooltip 完整），无文件时用两侧文本开头，兜底“对比 N”
+  function computeTabTitle() {
+    var pL = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
+    var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
+    var nL = stripExt(baseName(pL)), nR = stripExt(baseName(pR));
+    if (nL || nR) {
+      return {
+        title: abbrev(nL || '空', 8) + '↔' + abbrev(nR || '空', 8),
+        tip: (nL || '（空）') + ' ↔ ' + (nR || '（空）')
+      };
+    }
+    var lt = (editorL.getValue() || '').replace(/\s+/g, ' ').trim();
+    var rt = (editorR.getValue() || '').replace(/\s+/g, ' ').trim();
+    if (lt || rt) {
+      return {
+        title: abbrev(lt.slice(0, 8) || '空', 8) + '↔' + abbrev(rt.slice(0, 8) || '空', 8),
+        tip: (lt.slice(0, 30) || '（空）') + ' ↔ ' + (rt.slice(0, 30) || '（空）')
+      };
+    }
+    return null;
+  }
+  function updateTabTitle() {
+    var tab = currentTab();
+    if (!tab) return;
+    var t = computeTabTitle();
+    var title = t ? t.title : tab.defTitle;
+    var tip = t ? t.tip : tab.defTitle;
+    if (title !== tab.title || tip !== tab.tip) {
+      tab.title = title;
+      tab.tip = tip;
+      renderTabs();
+    }
   }
   function restoreTab(tab) {
     restoring = true;
@@ -999,6 +1107,7 @@
     if (FilterBar.setFields) FilterBar.setFields([]);
     compare(true);                                 // 渲染差异区（恢复发起，不写历史）
     restoring = false;
+    queueRefitPage();                              // 编辑区显隐恢复后重对齐页面高度
     restorePdfFiles(tab);                          // 异步恢复 PDF / 文件下拉
   }
   function selectTabFiles(tab, my) {
@@ -1007,7 +1116,14 @@
       var side = pair[i][0], path = pair[i][1];
       if (FilterBar.selectFile) FilterBar.selectFile(side, path || '', true);
       if (path && Source.fileUrl) {
-        if (/\.pdf$/i.test(path)) { if (PdfView.load) PdfView.load(side, Source.fileUrl(path), my).catch(function () {}); }
+        // fileUrl 返回 Promise（Tauri 模式需先经 Rust 读字节转 Blob URL）
+        if (/\.pdf$/i.test(path)) {
+          if (PdfView.load) {
+            Source.fileUrl(path).then(function (url) {
+              return PdfView.load(side, url, my);
+            }).catch(function () {});
+          }
+        }
         else if (PdfView.clear) PdfView.clear(side);
       } else if (PdfView.clear) PdfView.clear(side);
     }
@@ -1040,7 +1156,7 @@
   }
   function onTabAdd() {
     var id = ++tabSeq;
-    tabs.push({ id: id, title: '对比 ' + id, state: newTabState() });
+    tabs.push({ id: id, defTitle: '对比 ' + id, title: '对比 ' + id, tip: '对比 ' + id, state: newTabState() });
     renderTabs();
     if (Tabs.setActive) Tabs.setActive(id);
   }
@@ -1072,10 +1188,11 @@
   editorL.on('change', scheduleCompare);
   editorR.on('change', scheduleCompare);
   setTidyBtnMode(false);
-  var firstTab = { id: ++tabSeq, title: '对比 ' + tabSeq, state: newTabState() };
+  var firstTab = { id: ++tabSeq, defTitle: '对比 ' + tabSeq, title: '对比 ' + tabSeq, tip: '对比 ' + tabSeq, state: newTabState() };
   tabs.push(firstTab);
   renderTabs();
   if (Tabs.setActive) Tabs.setActive(firstTab.id);  // → onSwitch → restoreTab（首次空状态渲染）
   setPdfZoom('auto');
   renderHistory();                                 // 侧边栏历史首次渲染
+  queueRefitPage();                                // 首屏：页面高度对齐 PDF 区底部
 })();

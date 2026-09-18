@@ -105,16 +105,22 @@
     if (!p) return;
     var pageNum = page.pageNumber;
     var vp = page.getViewport({ scale: scale });
-    var dpr = (W && W.devicePixelRatio) || 1; // 高分屏：canvas 按 dpr 渲染再缩放到 CSS 尺寸，避免模糊
+    var dpr = (W && W.devicePixelRatio) || 1;
+    // 清晰度关键：后备缓冲取整到设备像素，CSS 尺寸严格=像素/dpr（与设备像素 1:1 映射）。
+    // 旧写法缓冲=floor(vp×dpr)、CSS=vp 小数尺寸，二者亚像素错位 → 浏览器二次采样 → 整页发虚
+    // （WPS/阅读器直接按设备像素光栅化，所以任意比例都清晰）。dpr=1 的小数尺寸同样中招。
+    var pxW = Math.max(1, Math.round(vp.width * dpr));
+    var pxH = Math.max(1, Math.round(vp.height * dpr));
+    var cssW = pxW / dpr, cssH = pxH / dpr;
     var wrap = document.createElement('div');
     wrap.className = 'pdf-page';
     wrap._pageNum = pageNum;
-    wrap.style.height = vp.height + 'px';
+    wrap.style.height = cssH + 'px';
     var canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.floor(vp.width * dpr));
-    canvas.height = Math.max(1, Math.floor(vp.height * dpr));
-    canvas.style.width = vp.width + 'px';
-    canvas.style.height = vp.height + 'px';
+    canvas.width = pxW;
+    canvas.height = pxH;
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
     wrap.appendChild(canvas);
     var layer = document.createElement('div');
     layer.className = 'pdf-hl-layer';
@@ -128,10 +134,11 @@
     pageVps[side][pageNum - 1] = vp;
     var ctx = canvas.getContext('2d');
     if (ctx) {
+      var sx = pxW / vp.width, sy = pxH / vp.height;   // 精确铺满画布（≈dpr，吸收取整误差）
       var task = page.render({
         canvasContext: ctx,
         viewport: vp,
-        transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null
+        transform: (sx !== 1 || sy !== 1) ? [sx, 0, 0, sy, 0, 0] : null
       });
       renderTasks[side][pageNum] = task;
       task.promise.catch(function () { if (renderTasks[side][pageNum] === task) delete renderTasks[side][pageNum]; });
@@ -195,6 +202,30 @@
     ['L', 'R'].forEach(function (s) { if (docs[s]) renderAll(s); });
   }
   function getMode() { return mode; }
+
+  /** 列宽等容器尺寸变化后，按当前缩放模式重排已加载文档（不改变 mode） */
+  function relayout() {
+    ['L', 'R'].forEach(function (s) { if (docs[s]) renderAll(s); });
+  }
+
+  /**
+   * 左右面板内容整体互换（左右互换按钮）：文档/标注/文本项/视口/原文缓存全部对调，
+   * 就地重排，不重新取文件。两侧在途加载/渲染/收集一律作废，防止回填覆盖互换结果。
+   */
+  function swap() {
+    var tmp;
+    tmp = docs.L; docs.L = docs.R; docs.R = tmp;
+    tmp = highlights.L; highlights.L = highlights.R; highlights.R = tmp;
+    tmp = textItems.L; textItems.L = textItems.R; textItems.R = tmp;
+    tmp = pageVps.L; pageVps.L = pageVps.R; pageVps.R = tmp;
+    tmp = panelText.L; panelText.L = panelText.R; panelText.R = tmp;
+    cancelRenderTasks('L'); cancelRenderTasks('R');
+    loadSeq.L++; loadSeq.R++;
+    if (panels.L) panels.L.innerHTML = '';
+    if (panels.R) panels.R.innerHTML = '';
+    if (docs.L) renderAll('L');
+    if (docs.R) renderAll('R');
+  }
 
   // 窗口尺寸变化时重排（节流）
   if (W) {
@@ -580,7 +611,7 @@
 
   root.PdfView = {
     init: function (els) { panels.L = (els && els.left) || null; panels.R = (els && els.right) || null; },
-    load: load, clear: clear, setMode: setMode, getMode: getMode,
+    load: load, clear: clear, setMode: setMode, getMode: getMode, swap: swap, relayout: relayout,
     getPanel: function (side) { return panels[side] || null; },
     // 仅诊断用：各内部分解状态（正常功能不依赖）
     _debug: function (side) {

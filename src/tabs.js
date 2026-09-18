@@ -9,7 +9,7 @@
  *   onSwitch(id)    切到某标签（id 与当前激活不同才触发；程序化 setActive 同样触发）
  *   onAdd()         点“＋”
  *   onClose(id)     点某标签的 ×
- * Tabs.setList([{id,title}])   // 渲染标签列表（渲染时把 ＋ 移到最后一个标签之后）
+ * Tabs.setList([{id,title,tip}]) // 渲染标签列表（渲染时把 ＋ 移到最后一个标签之后；tip 为悬停提示）
  * Tabs.setActive(id)           // 激活标签（id 变化时触发 onSwitch）—— 切换逻辑的单一入口
  * Tabs.getActive()/getList()   // 供断言 / 外部读取
  */
@@ -29,6 +29,7 @@
         var el = document.createElement('div');
         el.className = 'tab' + (t.id === activeId ? ' active' : '');
         el.setAttribute('data-id', t.id);
+        el.title = t.tip || t.title || '';        // 悬停显示完整对比对象（标题常被省略号截断）
         var title = document.createElement('span');
         title.className = 'tab-title';
         title.textContent = t.title;

@@ -70,6 +70,30 @@ node -e "require('./test/ui-init.js')"       # 界面初始化/渲染（DOM 桩�
 
 `dl-deps.js` 是依赖下载脚本，仅当需要重新打包 `lib/` 时使用（需联网）。
 
+## 打包桌面应用（Tauri）
+
+可把本工具打包成 Windows 桌面应用分发（需 Node.js LTS + Rust stable + WebView2，首次构建需联网）：
+
+```bash
+npm install                     # 安装 @tauri-apps/cli（仅首次）
+node make-icon.js               # 生成图标源文件 icon.png（已生成过可跳过）
+npx tauri icon icon.png         # 生成 src-tauri/icons/ 各尺寸图标（已生成过可跳过）
+npm run dev:desktop             # 桌面窗口内验证（自动生成 dist/ 并编译调试版）
+npm run build:desktop           # 打包发布版
+```
+
+产物在 `src-tauri/target/release/`：
+
+- `bundle/nsis/compare-text_<版本>_x64-setup.exe` — NSIS 安装包（推荐分发，免管理员权限安装）
+- `bundle/msi/compare-text_<版本>_x64_en-US.msi` — MSI 安装包
+- `compare-text.exe` — 免安装单文件，可直接运行
+
+目标机器需装有 WebView2（Win11 自带；Win10 若没有，安装程序会自动引导下载，安装时需联网）。
+
+架构说明：桌面模式下没有 Node 服务器，`src/source-api.js` 检测到 Tauri 环境后，
+自动把 `/api/list`、`/api/browse`、`/api/file` 切换为同名 Rust 命令（`src-tauri/src/lib.rs`）；
+浏览器模式（`node serve.js`）行为不变，两种模式共用同一套前端代码。
+
 ## 说明 / 取舍
 
 - “忽略换行”会顺带忽略所有空白字符（含空格/Tab），以支持“第一行\n第二行”与“第一行 第二行”视为一致；
