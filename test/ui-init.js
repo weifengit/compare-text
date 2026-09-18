@@ -131,8 +131,13 @@ check('PDF 标注：grid 结果把变更行映射到两侧行号', function () {
   var Pdf = sandbox.PdfView;
   if (!Pdf || !Pdf.getHighlight) throw new Error('PdfView 应暴露 getHighlight');
   var mL = Pdf.getHighlight('L'), mR = Pdf.getHighlight('R');
-  if (mL[2] !== 'ch') throw new Error('左侧第 2 行应为 ch，实际 ' + JSON.stringify(mL));
-  if (mR[2] !== 'ch') throw new Error('右侧第 2 行应为 ch');
+  if (!mL[2] || mL[2].t !== 'ch') throw new Error('左侧第 2 行应为 ch 对象，实际 ' + JSON.stringify(mL));
+  if (!mR[2] || mR[2].t !== 'ch') throw new Error('右侧第 2 行应为 ch 对象');
+  // 字符级：'b'→'X'，左侧标 rm 片段应只含 'b'，右侧标 ad 片段应只含 'X'
+  var nonEqL = (mL[2].segs || []).filter(function (s) { return s.cls !== 'eq'; });
+  var nonEqR = (mR[2].segs || []).filter(function (s) { return s.cls !== 'eq'; });
+  if (nonEqL.length !== 1 || nonEqL[0].text !== 'b') throw new Error('左侧变更字符应仅为 b，实际 ' + JSON.stringify(nonEqL));
+  if (nonEqR.length !== 1 || nonEqR[0].text !== 'X') throw new Error('右侧变更字符应仅为 X，实际 ' + JSON.stringify(nonEqR));
 });
 check('flow 结果渲染不抛错且含行号列', function () {
   var res = Compute.computeDiff({ left: '一\n二', right: '一 二', options: { ignoreNewline: true } });
@@ -145,6 +150,31 @@ check('flow 结果渲染不抛错且含行号列', function () {
   if (els['results'].innerHTML.indexOf('<span class="ln">') === -1) {
     throw new Error('flow 模式左右栏应包含行号列');
   }
+});
+check('PDF 标注遵循忽略选项：flow 下仅换行/空格差异不产生标注', function () {
+  // 全部 6 项忽略开启（与默认一致）：'一\n二' vs '一 二' 仅差换行与空格，flow 判定一致
+  var opts = { ignoreCase: true, ignoreEol: true, ignoreWhitespace: true, ignoreNewline: true, ignoreWidth: true, ignorePunct: true };
+  var res = Compute.computeDiff({ left: '一\n二', right: '一 二', options: opts });
+  res._options = opts;
+  editors[0].setValue('一\n二');
+  editors[1].setValue('一 二');
+  var last = posted[posted.length - 1];
+  workers[0].onmessage({ data: { id: last.id, result: res } });
+  var Pdf = sandbox.PdfView;
+  var mL = Pdf.getHighlight('L'), mR = Pdf.getHighlight('R');
+  if (Object.keys(mL).length || Object.keys(mR).length) {
+    throw new Error('忽略换行/空格下不应有 PDF 标注，实际 L=' + JSON.stringify(mL) + ' R=' + JSON.stringify(mR));
+  }
+  // 对照：真实内容差异（'二'→'三'）应只在右侧第 2 行标出 ad 字符 '三'
+  var res2 = Compute.computeDiff({ left: '一\n二', right: '一\n三', options: opts });
+  res2._options = opts;
+  editors[0].setValue('一\n二');
+  editors[1].setValue('一\n三');
+  workers[0].onmessage({ data: { id: posted[posted.length - 1].id, result: res2 } });
+  var mR2 = Pdf.getHighlight('R');
+  if (!mR2[2] || mR2[2].t !== 'ad') throw new Error('右侧第 2 行应标 ad，实际 ' + JSON.stringify(mR2));
+  var nonEq = (mR2[2].segs || []).filter(function (s) { return s.cls !== 'eq'; });
+  if (nonEq.length !== 1 || nonEq[0].text !== '三') throw new Error('右侧第 2 行变更字符应仅为 三，实际 ' + JSON.stringify(nonEq));
 });
 check('折叠行点击（grid）不抛错', function () {
   var grid = Compute.computeDiff({

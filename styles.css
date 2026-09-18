@@ -323,13 +323,30 @@ html, body {
   background: #525659;
   padding: 10px;
   position: relative;
-  user-select: none;
-  -webkit-user-select: none;
 }
 .pdf-panel + .pdf-panel { border-left: 2px solid #ccd5e0; }
 .pdf-panel .pdf-page { margin: 0 auto 10px; width: fit-content; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
 .pdf-page { position: relative; }
 .pdf-hl-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
+/* 可选中文本层：文字透明，拖动/双击走浏览器原生选中高亮，复制到剪贴板的是 PDF 真实文本 */
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: transparent;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+.pdf-tl {
+  position: absolute;
+  white-space: pre;
+  overflow: hidden;
+  color: transparent;
+  font-family: sans-serif;
+  user-select: text;
+  -webkit-user-select: text;
+}
 .pdf-hl { position: absolute; pointer-events: none; }
 .pdf-hl.rm { background: rgba(226, 70, 70, .40); }
 .pdf-hl.ad { background: rgba(80, 170, 80, .40); }

@@ -150,3 +150,13 @@ PDF的4种视图切换之后，渲染的PDF变成了空白的，看不到内容
 1、显示的PDF总是模模糊糊的
 2、PDF只有浏览查看功能不能用鼠标去选中其中的文字，能否改为可以选中
 3、能否实现根据主区域1中分析出的差异，直接提现并标注在PDF中，也在类似区域1那样，对那些位置差异位置标注颜色背景
+
+135. PDF 显示模糊 — canvas 按 devicePixelRatio 放大后备缓冲（backing=vp×dpr），渲染时叠加 [dpr,0,0,dpr,0,0] 变换再缩放回 CSS 尺寸；高分屏（dpr=2）下文字清晰锐利（src/pdfview.js，Edge 无头截图实测）。
+136. PDF 文字可选中 — 新增透明文本覆盖层：每个 .pdf-page 叠加 .pdf-text-layer，按文本项变换矩阵（viewport.transform × item.transform 矩阵乘）逐项摆放 .pdf-tl 透明 div（top=基线-字身高度，不设 line-height 以贴合基线），浏览器原生拖选即得文本；同步移除 .pdf-panel 的 user-select:none。期间修复两处 vp.transform 当函数调用的 bug（其本质是矩阵数组），并给 collectItems 静默 catch 增加 __pdfCollectErr 留痕 + PdfView._debug 诊断钩子。
+137. 差异标注到 PDF — 沿用并修正高亮层：collectItems 把文本项起始行号与 diff 行号映射（rm 红/ad 绿/ch 琥珀），paintInto 用同一矩阵乘法换算坐标，框高=字身×1.2 覆盖完整行；加载、setHighlight、视图切换/重排后均自动重绘。Edge 无头截图确认 ch/ad 条精确覆盖对应文本行。
+
+
+
+138. PDF 差异标注精确到字符 + 修正垂直覆盖 — 变更行不再整行涂色：updatePdfAnnotations 直接复用 grid 行内字符片段（segL/segR，与区域1 高亮同源），左侧标 rm 片段、右侧标 ad 片段；pdfview 端 segRanges 算行内偏移区间，collectItems 给每文本项补 col（行内起始字符偏移）做区间∩项映射，x 用 canvas measureText 测量并按 PDF 实际项宽归一（测不出时按项宽均摊兜底）。垂直几何改为 [基线-字身, 基线+0.35×字身]，下伸笔画（g/y/p/q）完整覆盖。rm/ad 仍整行涂色。Edge 无头截图实测：'brown'/'Selection' 只框对应单词，下伸笔画在框内（src/pdfview.js、src/app.js）。
+
+139. PDF 两处修复 — ① 拖选蓝色底纹只盖文字上半：.pdf-tl 行盒原为 1em 高被裁掉下伸区，改为盒高=字身×1.35 且 lineHeight=盒高，行盒撑满整盒（[基线-字身, 基线+0.35×字身]，与差异标注框同几何），底纹完整覆盖 g/y/p/q 下伸笔画（Edge 无头程序化选区截图实测）。② PDF 标注未遵循 6 个忽略选项：flow 模式（默认开忽略换行）下 updatePdfAnnotations 原先另算一份强制 ignoreNewline=false 的 grid diff，把换行/重排差异也标进 PDF；改为新增 putFlow 直接把 flow 结果的 segsL/segsR 按行切分为 {t:'rm'|'ad', segs} 标注映射——与区域1 完全同一数据流，6 个忽略按钮对 PDF 标注同步生效（src/pdfview.js、src/app.js；ui-init 新增回归用例，全套 26+25+11+3+5 绿）。

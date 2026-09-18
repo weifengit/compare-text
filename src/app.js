@@ -301,41 +301,53 @@
     rebindScrollSync();
   }
 
-  /** 把 diff 结果的行级差异标注到 PDF 面板（grid 直接用结果行；flow 补一次行级 diff） */
+  /** 把 diff 结果标注到 PDF 面板：rm/ad 整行涂色；change 行携带行内字符片段（segL/segR，与区域1 高亮同源）做字符级标注 */
   function updatePdfAnnotations(res) {
     var mapL = {}, mapR = {};
-    if (res && !res.error && res.mode === 'grid') {
-      for (var i = 0; i < res.rows.length; i++) {
-        var r = res.rows[i];
+    function put(rows) {
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
         if (r.type === 'change') {
-          if (r.li >= 0) mapL[r.li + 1] = 'ch';
-          if (r.ri >= 0) mapR[r.ri + 1] = 'ch';
+          if (r.li >= 0) mapL[r.li + 1] = { t: 'ch', segs: r.segL || [] };
+          if (r.ri >= 0) mapR[r.ri + 1] = { t: 'ch', segs: r.segR || [] };
         } else if (r.type === 'remove') {
           if (r.li >= 0) mapL[r.li + 1] = 'rm';
         } else if (r.type === 'add') {
           if (r.ri >= 0) mapR[r.ri + 1] = 'ad';
         }
       }
-    } else if (res && !res.error && res.mode === 'flow') {
-      // 忽略换行默认开后仍按真实行差异标注（仅当有 PDF 已加载才补算）
-      if ((PdfView.isLoaded && PdfView.isLoaded('L')) || (PdfView.isLoaded && PdfView.isLoaded('R'))) {
-        var opts = readOptions();           // 与当前忽略选项一致，但关闭忽略换行改用行级 diff
-        opts.ignoreNewline = false;
-        var g = Compute.computeDiff({ left: editorL.getValue(), right: editorR.getValue(), options: opts });
-        if (g && g.mode === 'grid') {
-          for (var j = 0; j < g.rows.length; j++) {
-            var r2 = g.rows[j];
-            if (r2.type === 'change') {
-              if (r2.li >= 0) mapL[r2.li + 1] = 'ch';
-              if (r2.ri >= 0) mapR[r2.ri + 1] = 'ch';
-            } else if (r2.type === 'remove') {
-              if (r2.li >= 0) mapL[r2.li + 1] = 'rm';
-            } else if (r2.type === 'add') {
-              if (r2.ri >= 0) mapR[r2.ri + 1] = 'ad';
-            }
+    }
+    /** 流水字符片段 → 逐行 { t, segs } 映射（segs 需含 eq 片段以维持行内偏移） */
+    function putFlow(map, segs, t) {
+      if (!segs || !segs.length) return;
+      var line = 1;
+      var cur = [];                                   // 当前行片段（含 eq，保证偏移正确）
+      function flush() {
+        for (var i = 0; i < cur.length; i++) {
+          if (cur[i].cls !== 'eq') { map[line] = { t: t, segs: cur }; break; }
+        }
+        cur = [];
+      }
+      for (var i = 0; i < segs.length; i++) {
+        var cls = segs[i].cls, text = segs[i].text, a = 0;
+        for (var j = 0; j <= text.length; j++) {
+          if (j === text.length || text[j] === '\n') {
+            if (j > a) cur.push({ text: text.slice(a, j), cls: cls });
+            if (j < text.length) { flush(); line++; }
+            a = j + 1;
           }
         }
       }
+      flush();
+    }
+    if (res && !res.error && res.mode === 'grid') {
+      put(res.rows);
+    } else if (res && !res.error && res.mode === 'flow') {
+      // flow 结果已含全部忽略选项语义（含忽略换行）：把整篇字符片段按行切分，
+      // 左侧标 rm 片段、右侧标 ad 片段，与区域1 流水视图完全一致（不再补算行级 diff，
+      // 否则换行/重排差异会被错误地标到 PDF 上）
+      putFlow(mapL, res.segsL, 'rm');
+      putFlow(mapR, res.segsR, 'ad');
     }
     if (PdfView.setHighlight) PdfView.setHighlight('L', mapL);
     if (PdfView.setHighlight) PdfView.setHighlight('R', mapR);
