@@ -17,6 +17,7 @@
   var layoutEl = $('layout');
   var vsplitEl = $('vsplit');
   var historyList = $('historyList');
+  var historyClearBtn = $('historyClear');
   var sidebarEl = $('sidebar');
   var sidebarToggle = $('sidebarToggle');
   var appEl = $('appRoot');
@@ -304,8 +305,8 @@
     rebindScrollSync();
   }
 
-  /** 把 diff 结果标注到 PDF 面板：rm/ad 整行涂色；change 行携带行内字符片段（segL/segR，与区域1 高亮同源）做字符级标注 */
-  function updatePdfAnnotations(res) {
+  /** 由 diff 结果构建 PDF 标注映射：rm/ad 整行涂色；change 行携带行内字符片段（segL/segR，与区域1 高亮同源）做字符级标注 */
+  function buildAnnotMaps(res) {
     var mapL = {}, mapR = {};
     function put(rows) {
       for (var i = 0; i < rows.length; i++) {
@@ -352,8 +353,48 @@
       putFlow(mapL, res.segsL, 'rm');
       putFlow(mapR, res.segsR, 'ad');
     }
-    if (PdfView.setHighlight) PdfView.setHighlight('L', mapL);
-    if (PdfView.setHighlight) PdfView.setHighlight('R', mapR);
+    return { L: mapL, R: mapR };
+  }
+
+  /** 把 diff 结果标注到 PDF 面板（先按编辑器 diff 标注，再按需用 PDF 原文校正，见下） */
+  function updatePdfAnnotations(res) {
+    var maps = buildAnnotMaps(res);
+    if (PdfView.setHighlight) {
+      PdfView.setHighlight('L', maps.L);
+      PdfView.setHighlight('R', maps.R);
+    }
+    syncPdfTextAnnotations();
+  }
+
+  // PDF 标注的行号坐标系 = PDF 原文行号。“修整”（或手工编辑）会改变编辑器文本的行号系，
+  // 使编辑器 diff 的行号与 PDF 原文错位（修整成 1 行后全部标到 PDF 第 1 行 → 标注失效）。
+  // 因此：凡已加载 PDF 且其原文与编辑器当前文本不一致，就用 PDF 原文 + 当前忽略选项另算一份
+  // diff（与区域1 同一数据流：grid 行 / flow 片段）覆盖该侧标注；一致时零额外开销。
+  var pdfAnnSeq = 0;
+  function syncPdfTextAnnotations() {
+    if (!PdfView.isLoaded || !PdfView.extractPanel || !PdfView.setHighlight) return;
+    var hasL = PdfView.isLoaded('L'), hasR = PdfView.isLoaded('R');
+    if (!hasL && !hasR) return;
+    var my = ++pdfAnnSeq;
+    Promise.all([
+      hasL ? PdfView.extractPanel('L') : Promise.resolve(null),
+      hasR ? PdfView.extractPanel('R') : Promise.resolve(null)
+    ]).then(function (txts) {
+      if (my !== pdfAnnSeq) return;                 // 已有更新的标注流程接管
+      var tL = txts[0], tR = txts[1];
+      var diffL = hasL && tL != null && tL !== editorL.getValue();
+      var diffR = hasR && tR != null && tR !== editorR.getValue();
+      if (!diffL && !diffR) return;                 // 编辑器即 PDF 原文：现有标注已正确
+      var r2 = runLocal({                           // PDF 原文的 diff（同步；文本量与 PDF 相当，可控）
+        left: tL == null ? '' : tL,
+        right: tR == null ? '' : tR,
+        options: readOptions()
+      });
+      if (my !== pdfAnnSeq || !r2 || r2.error) return;
+      var maps = buildAnnotMaps(r2);
+      if (diffL) PdfView.setHighlight('L', maps.L);
+      if (diffR) PdfView.setHighlight('R', maps.R);
+    }).catch(function () { /* 提取失败：保留编辑器 diff 的标注 */ });
   }
 
   function reportStats(res) {
@@ -445,9 +486,13 @@
         + '<button class="h-del" data-i="' + i + '" title="删除">×</button>'
         + '<span class="h-snippet" title="' + escHtml(snippet) + '">' + escHtml(snippet) + '</span></div>';
     }
-    if (arr.length) html += '<button class="h-clear">清空全部</button>';
     historyList.innerHTML = html;
+    historyClearBtn.hidden = !arr.length;      // “清空全部”固定侧边栏最底部（index.html 静态元素），无记录时隐藏
   }
+  historyClearBtn.addEventListener('click', function () {
+    try { localStorage.removeItem(HISTORY_KEY); } catch (e2) {}
+    renderHistory();
+  });
   historyList.addEventListener('click', function (e) {
     var t = e.target;
     if (t.classList.contains('h-restore')) {
@@ -461,9 +506,6 @@
       var arr = loadHistory();
       arr.splice(+t.getAttribute('data-i'), 1);
       try { localStorage.setItem(HISTORY_KEY, JSON.stringify(arr)); } catch (e2) {}
-      renderHistory();
-    } else if (t.classList.contains('h-clear')) {
-      try { localStorage.removeItem(HISTORY_KEY); } catch (e2) {}
       renderHistory();
     }
   });

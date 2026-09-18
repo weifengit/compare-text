@@ -166,6 +166,8 @@ html, body {
   padding: 10px 12px 16px;
   overflow: hidden;
   visibility: visible;
+  display: flex;                    /* 纵向布局：历史记录列表弹性撑满，清空按钮沉底 */
+  flex-direction: column;
   transition: none;                 /* 初始无动画，避免加载闪烁 */
 }
 .sidebar.collapsed {
@@ -543,7 +545,8 @@ html, body {
 }
 
 /* 历史记录：内联显示在左侧边栏（“历史记录”标题之后，无需点击展开） */
-.history-list { max-height: 40vh; overflow: auto; margin-top: 4px; }
+/* 历史记录：列表动态撑满侧边栏剩余高度（不再限死 40vh），“清空全部”固定最底部 */
+.history-list { flex: 1 1 auto; min-height: 60px; overflow: auto; margin-top: 4px; }
 .history-list .h-item { flex-wrap: wrap; }
 .history-list .h-snippet { width: 100%; order: 4; }
 .hidden { display: none; }
@@ -568,7 +571,7 @@ html, body {
 .h-del { color: #c0392b; }
 .h-time { color: var(--muted); font-size: 11.5px; flex: 0 0 auto; }
 .h-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; color: var(--txt); }
-.h-clear { width: 100%; margin-top: 6px; padding: 5px; border: 1px solid var(--border); border-radius: 6px; background: #fff; cursor: pointer; color: var(--muted); }
+.h-clear { flex: 0 0 auto; width: 100%; margin-top: 6px; padding: 5px; border: 1px solid var(--border); border-radius: 6px; background: #fff; cursor: pointer; color: var(--muted); }
 .h-clear:hover { color: var(--del-text); }
 .h-empty { padding: 14px; text-align: center; color: var(--muted); }
 

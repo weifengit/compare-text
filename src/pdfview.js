@@ -25,6 +25,7 @@
   var highlights = { L: {}, R: {} };      // 行号 → 'rm'|'ad'|'ch' 的差异标注映射
   var textItems = { L: null, R: null };   // 每侧 [{page, boxes:[{transform,width,line}]}]，与 collectText 行号一致
   var pageVps = { L: [], R: [] };         // 每侧每页当前 PageViewport（供重绘时换算坐标）
+  var panelText = { L: null, R: null };   // 每侧已提取的 PDF 原文缓存（差异标注独立坐标系用，clearPanel 失效）
   var renderGen = { L: 0, R: 0 };         // 每侧渲染代数：renderAll 递增，renderPage 回调据此丢弃过期页面
   var renderTasks = { L: {}, R: {} };     // 每侧每页在途 RenderTask（重绘前取消，避免叠加/残留）
   var W = (typeof window !== 'undefined') ? window : null;
@@ -64,6 +65,7 @@
     highlights[side] = {};
     textItems[side] = null;
     pageVps[side] = [];
+    panelText[side] = null;
   }
 
   function clear(side) {
@@ -71,60 +73,73 @@
     else { clearPanel('L'); clearPanel('R'); }
   }
 
-  /** 缩放比例：actual=100%；page=整页适配；width=适应宽度；auto=适应宽度但不超过实际大小 */
-  function pageScale(vp1, p) {
+  /**
+   * 每页缩放比例（同一文档同一轮渲染用同一份结果，避免逐页异步渲染时滚动条先后出现、
+   * 或各页 MediaBox 尺寸不同导致页面忽大忽小）：
+   *  actual=100%；page=整页适配——取所有页中最严格的 scale 统一应用（同 PDF 各页等大）；
+   *  width=适应宽度（逐页 cw/w，天然同宽）；auto=适应宽度但不超过实际大小。
+   */
+  function computeScales(p, vp1s) {
     var cw = (p.clientWidth || 600) - 2;
     var ch = (p.clientHeight || 800) - 2;
-    if (mode === 'actual') return 1;
-    if (mode === 'page') return Math.max(0.1, Math.min(cw / vp1.width, ch / vp1.height));
-    var fit = cw / vp1.width;
-    return mode === 'auto' ? Math.min(fit, 1) : Math.max(fit, 0.1);
+    if (mode === 'actual') return vp1s.map(function () { return 1; });
+    if (mode === 'page') {
+      var s = Infinity;
+      for (var i = 0; i < vp1s.length; i++) {
+        if (!vp1s[i]) continue;
+        s = Math.min(s, cw / vp1s[i].width, ch / vp1s[i].height);
+      }
+      if (!isFinite(s) || s <= 0) s = 1;
+      s = Math.max(0.1, s);
+      return vp1s.map(function () { return s; });
+    }
+    return vp1s.map(function (vp1) {
+      if (!vp1) return 1;
+      var fit = cw / vp1.width;
+      return mode === 'auto' ? Math.min(fit, 1) : Math.max(fit, 0.1);
+    });
   }
 
-  function renderPage(side, pageNum, pdf, gen) {
+  function renderPage(side, page, scale, gen) {
     var p = panels[side];
     if (!p) return;
-    pdf.getPage(pageNum).then(function (page) {
-      if (gen !== renderGen[side]) return;      // 过期渲染：已被新渲染取代，不追加不绘制
-      var vp1 = page.getViewport({ scale: 1 });
-      var scale = pageScale(vp1, p);
-      var vp = page.getViewport({ scale: scale });
-      var dpr = (W && W.devicePixelRatio) || 1; // 高分屏：canvas 按 dpr 渲染再缩放到 CSS 尺寸，避免模糊
-      var wrap = document.createElement('div');
-      wrap.className = 'pdf-page';
-      wrap._pageNum = pageNum;
-      wrap.style.height = vp.height + 'px';
-      var canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.floor(vp.width * dpr));
-      canvas.height = Math.max(1, Math.floor(vp.height * dpr));
-      canvas.style.width = vp.width + 'px';
-      canvas.style.height = vp.height + 'px';
-      wrap.appendChild(canvas);
-      var layer = document.createElement('div');
-      layer.className = 'pdf-hl-layer';
-      wrap._hlLayer = layer;
-      wrap.appendChild(layer);
-      var textLayer = document.createElement('div');
-      textLayer.className = 'pdf-text-layer';
-      wrap._textLayer = textLayer;
-      wrap.appendChild(textLayer);
-      p.appendChild(wrap);
-      pageVps[side][pageNum - 1] = vp;
-      var ctx = canvas.getContext('2d');
-      if (ctx) {
-        var task = page.render({
-          canvasContext: ctx,
-          viewport: vp,
-          transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null
-        });
-        renderTasks[side][pageNum] = task;
-        task.promise.catch(function () { if (renderTasks[side][pageNum] === task) delete renderTasks[side][pageNum]; });
-      }
-      try { paintPage(side, pageNum, wrap, vp); }      // 差异标注：失败不影响页面渲染
-      catch (e) { /* 忽略 */ }
-      try { paintTextLayer(side, pageNum, wrap, vp); } // 可选中文本层：同上
-      catch (e) { /* 忽略 */ }
-    }).catch(function () { /* 单页失败忽略 */ });
+    var pageNum = page.pageNumber;
+    var vp = page.getViewport({ scale: scale });
+    var dpr = (W && W.devicePixelRatio) || 1; // 高分屏：canvas 按 dpr 渲染再缩放到 CSS 尺寸，避免模糊
+    var wrap = document.createElement('div');
+    wrap.className = 'pdf-page';
+    wrap._pageNum = pageNum;
+    wrap.style.height = vp.height + 'px';
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.floor(vp.width * dpr));
+    canvas.height = Math.max(1, Math.floor(vp.height * dpr));
+    canvas.style.width = vp.width + 'px';
+    canvas.style.height = vp.height + 'px';
+    wrap.appendChild(canvas);
+    var layer = document.createElement('div');
+    layer.className = 'pdf-hl-layer';
+    wrap._hlLayer = layer;
+    wrap.appendChild(layer);
+    var textLayer = document.createElement('div');
+    textLayer.className = 'pdf-text-layer';
+    wrap._textLayer = textLayer;
+    wrap.appendChild(textLayer);
+    p.appendChild(wrap);
+    pageVps[side][pageNum - 1] = vp;
+    var ctx = canvas.getContext('2d');
+    if (ctx) {
+      var task = page.render({
+        canvasContext: ctx,
+        viewport: vp,
+        transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null
+      });
+      renderTasks[side][pageNum] = task;
+      task.promise.catch(function () { if (renderTasks[side][pageNum] === task) delete renderTasks[side][pageNum]; });
+    }
+    try { paintPage(side, pageNum, wrap, vp); }      // 差异标注：失败不影响页面渲染
+    catch (e) { /* 忽略 */ }
+    try { paintTextLayer(side, pageNum, wrap, vp); } // 可选中文本层：同上
+    catch (e) { /* 忽略 */ }
   }
 
   function renderAll(side) {
@@ -136,7 +151,20 @@
     p.innerHTML = '';
     pageVps[side] = [];
     var total = pdf.numPages;
-    for (var i = 1; i <= total; i++) renderPage(side, i, pdf, gen);
+    var gets = [];
+    for (var i = 1; i <= total; i++) {
+      gets.push(pdf.getPage(i).then(null, function () { return null; }));   // 单页失败不拖垮整体
+    }
+    Promise.all(gets).then(function (pages) {   // 先取齐全部页再统一算 scale、统一下笔
+      if (gen !== renderGen[side]) return;      // 过期渲染：已被新渲染取代
+      var vp1s = [];
+      for (var k = 0; k < pages.length; k++) vp1s.push(pages[k] ? pages[k].getViewport({ scale: 1 }) : null);
+      var scales = computeScales(p, vp1s);
+      for (var n = 0; n < pages.length; n++) {
+        if (!pages[n]) continue;                // 单页失败忽略
+        try { renderPage(side, pages[n], scales[n], gen); } catch (e) { /* 忽略 */ }
+      }
+    });
   }
 
   function load(side, url, token) {
@@ -211,12 +239,18 @@
     });
   }
 
-  /** 从面板已加载的文档提取文本（不销毁，须在 load() 成功之后调用；供渲染+取词共用一次加载） */
+  /** 从面板已加载的文档提取文本（不销毁，须在 load() 成功之后调用；结果缓存，重复调用零开销） */
   function extractPanel(side) {
     var pdf = docs[side];
     if (!pdf) return Promise.reject(new Error('PDF 未加载'));
-    return collectText(pdf);
+    if (panelText[side] != null) return Promise.resolve(panelText[side]);
+    return collectText(pdf).then(function (t) {
+      if (docs[side] === pdf) panelText[side] = t;   // 期间未被新加载取代才缓存
+      return t;
+    });
   }
+  /** 同步取缓存的 PDF 原文（未提取过 → null；差异标注坐标系判定用） */
+  function getPanelText(side) { return panelText[side]; }
 
   /** 字段分段（v1 启发式）：以编号/标题行作为新章节起点 */
   var HEAD_RE = /^\s*(?:第[一二三四五六七八九十百\d]+[章章节条]|[（(]?[0-9一二三四五六七八九十]{1,3}[.、．)）]\s)/;
@@ -555,7 +589,7 @@
         vps: (pageVps[side] || []).length, wraps: (panels[side] || {}).children ? panels[side].children.length : 0,
         hl: Object.keys(highlights[side] || {}).length, loadToken: loadSeq[side] };
     },
-    extractText: extractText, extractPanel: extractPanel, segmentFields: segmentFields,
+    extractText: extractText, extractPanel: extractPanel, getPanelText: getPanelText, segmentFields: segmentFields,
     setHighlight: setHighlight, getHighlight: getHighlight, isLoaded: isLoaded,
     lineOffset: lineOffset, lineAtOffset: lineAtOffset, lineHeight: lineHeightAtLine
   };
