@@ -1,5 +1,5 @@
 /**
- * api-test.js — serve.js 的 /api/list 与 /api/file 单元测试。
+ * api-test.js — serve.js 的 /api/list、/api/file 与 /api/browse 单元测试。
  * 直接调用导出的 handleApi（mock req/res），不占用真实端口。
  * 运行：node test/api-test.js
  */
@@ -78,6 +78,20 @@ fs.writeFileSync(path.join(tmp, '说明.txt'), 'hello\nworld');
   // /api/file 不存在
   res = await callApi({ url: '/api/file?path=' + encodeURIComponent(path.join(tmp, '不存在.pdf')) });
   check('/api/file 不存在 → 404 {ok:false}', res._code === 404 && JSON.parse(bodyOf(res)).ok === false);
+
+  // /api/browse 子文件夹浏览
+  res = await callApi({ url: '/api/browse?path=' + encodeURIComponent(tmp) });
+  data = JSON.parse(bodyOf(res));
+  check('/api/browse 返回 ok:true、kind:dir、dirs 带完整路径',
+    data.ok === true && data.kind === 'dir'
+    && data.dirs.some(function (d) { return d.name === '子文件夹' && d.path === path.join(tmp, '子文件夹'); })
+    && typeof data.parent === 'string');
+  check('/api/browse 只列目录不列文件',
+    data.ok === true && !data.dirs.some(function (d) { return d.name === '说明.txt'; }));
+
+  // 无效路径
+  res = await callApi({ url: '/api/browse?path=' + encodeURIComponent('/no/such/dir-xyz') });
+  check('/api/browse 无效路径 → 400 {ok:false}', res._code === 400 && JSON.parse(bodyOf(res)).ok === false);
 
   // 未知 API
   res = await callApi({ url: '/api/other' });

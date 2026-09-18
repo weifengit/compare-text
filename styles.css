@@ -188,6 +188,7 @@ html, body {
 
 /* 对比源路径设置 */
 .src-block { display: flex; gap: 6px; margin: 0 0 6px; }
+.src-block input[readonly] { cursor: pointer; background: #f8fafc; }
 .src-block input {
   flex: 1; min-width: 0; padding: 4px 6px;
   border: 1px solid var(--border); border-radius: 6px; font: inherit; color: var(--txt);
@@ -294,6 +295,7 @@ html, body {
   flex-direction: column;
   flex: 1;
   min-height: 120px;
+  max-height: 65vh;   /* 主区域3：原始PDF显示区，高度上限为界面高度的65% */
 }
 .pdf-controls {
   display: flex;
@@ -340,7 +342,7 @@ html, body {
 .app.pdf-focus .results,
 .app.pdf-focus .resize-bar,
 .app.pdf-focus .editors { display: none; }
-.app.pdf-focus .pdfarea { flex: 1; margin-top: 0; }
+.app.pdf-focus .pdfarea { flex: 1; margin-top: 0; max-height: none; }
 .app.pdf-focus .pdf-panels { flex: 1; min-height: 0; }
 .app.pdf-focus .pdf-panel { height: auto; }
 
@@ -552,6 +554,95 @@ html, body {
 .h-clear { width: 100%; margin-top: 6px; padding: 5px; border: 1px solid var(--border); border-radius: 6px; background: #fff; cursor: pointer; color: var(--muted); }
 .h-clear:hover { color: var(--del-text); }
 .h-empty { padding: 14px; text-align: center; color: var(--muted); }
+
+/* 文件夹选择弹层 */
+.picker-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(20, 28, 38, .45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.picker-mask[hidden] { display: none; }
+.picker-mask.busy .picker-body { opacity: .55; pointer-events: none; }
+.picker {
+  width: min(560px, 92vw);
+  max-height: 78vh;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .3);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.picker-head .btn { border: none; font-size: 15px; padding: 2px 8px; line-height: 1; }
+.picker-nav {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.picker-nav input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  color: var(--txt);
+}
+.picker-nav input:focus { outline: none; border-color: var(--accent); }
+.picker-body {
+  overflow: auto;
+  padding: 4px 8px 10px;
+  min-height: 160px;
+  max-height: 48vh;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.picker-cur {
+  padding: 8px 8px 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+.picker-row {
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+.picker-row::before { content: '📁 '; opacity: .8; }
+.picker-row:hover { background: #f0f4fa; }
+.picker-row.active { background: #e2ebf7; color: var(--accent); }
+.picker-empty { padding: 22px 10px; text-align: center; color: var(--muted); }
+.picker-err { padding: 6px 14px 0; color: var(--del-text); font-size: 12px; }
+.picker-err.hidden { display: none; }
+.picker-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: #fafbfc;
+}
+.picker-foot .btn { margin: 0; }
 
 /* 提示条 */
 .toast {

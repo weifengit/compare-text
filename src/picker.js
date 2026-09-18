@@ -1,0 +1,155 @@
+/**
+ * picker.js — 对比源文件夹选择弹层。
+ * 职责：点击路径输入框弹出目录浏览器（浏览 / 直达），确认后回填输入框并触发回调。
+ * 依赖 serve.js 的 /api/browse；不依赖 app.js / filterbar（低耦合，按需引入）。
+ * 全局暴露：Picker
+ *
+ * Picker.init({ input, onPick })
+ *   input   路径输入框（页面 srcPathInput）
+ *   onPick(absPath)  确认某文件夹后回调（app 负责 loadSrcPath → 加载子文件夹并渲染）
+ */
+(function (root) {
+  'use strict';
+
+  var cfg = { input: null, onPick: null };
+  var els = {};
+  var cur = null;        // 当前浏览位置 {path, parent, kind:'dir'|'drives', dirs}
+  var navTok = 0;        // 导航令牌：丢弃过期 browse 响应
+
+  function $(id) { return document.getElementById(id); }
+
+  function browse(p) {
+    return fetch('/api/browse?path=' + encodeURIComponent(p || ''))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || d.ok !== true) throw new Error((d && d.error) || '目录读取失败');
+        return d;
+      });
+  }
+
+  function setErr(msg) {
+    if (els.err) { els.err.textContent = msg || ''; els.err.classList.toggle('hidden', !msg); }
+  }
+  function showLoading(on) { if (els.mask) els.mask.classList.toggle('busy', on); }
+
+  function setRowsActive(el) {
+    var rows = els.body.querySelectorAll('.picker-row');
+    for (var k = 0; k < rows.length; k++) rows[k].classList.remove('active');
+    if (el) el.classList.add('active');
+  }
+
+  function rowHtml(d) {
+    var row = document.createElement('div');
+    row.className = 'picker-row';
+    row.textContent = d.name;
+    row.title = d.path;
+    row.addEventListener('click', function () {
+      els.path.value = d.path;              // 单点：预览候选路径（回填输入框）
+      setRowsActive(row);
+    });
+    row.addEventListener('dblclick', function () { navigate(d.path); });   // 双击：进入目录
+    return row;
+  }
+
+  function render() {
+    els.body.innerHTML = '';
+    els.up.disabled = true;
+    if (!cur) return;
+    els.path.value = cur.path;
+    setRowsActive(null);
+    els.up.disabled = !canUp();
+    var head = document.createElement('div');
+    head.className = 'picker-cur';
+    head.textContent = cur.kind === 'drives' ? '选择磁盘（盘符列表）' : '当前：' + cur.path;
+    els.body.appendChild(head);
+    if (!cur.dirs.length) {
+      var empty = document.createElement('div');
+      empty.className = 'picker-empty';
+      empty.textContent = cur.kind === 'drives' ? '未发现可用磁盘' : '（没有子文件夹）';
+      els.body.appendChild(empty);
+      return;
+    }
+    for (var i = 0; i < cur.dirs.length; i++) els.body.appendChild(rowHtml(cur.dirs[i]));
+  }
+
+  /** 能否"上一级"：盘符列表不可；系统根 / 盘符根不可（盘符根的上级是盘符列表，但需 kind 为 dir 且非根路径） */
+  function canUp() {
+    if (!cur || cur.kind === 'drives') return false;
+    if (cur.parent) return true;
+    return cur.path !== '' && cur.path !== '/' && cur.path !== '\\';
+  }
+
+  function navigate(p) {
+    var my = ++navTok;
+    showLoading(true);
+    setErr('');
+    browse(p).then(function (d) {
+      if (my !== navTok) return;
+      cur = d; render();
+    }).catch(function (e) {
+      if (my !== navTok) return;
+      setErr((e && e.message) || '读取失败');
+      if (!cur && p !== '') navigate('');   // 起始路径不可用 → 退回根 / 盘符列表
+    }).then(function () { if (my === navTok) showLoading(false); });
+  }
+
+  function goUp() {
+    if (!canUp()) return;
+    navigate(cur.parent || '');
+  }
+
+  function open() {
+    cur = null;
+    els.path.value = '';
+    setErr('');
+    render();
+    els.mask.classList.remove('hidden');
+    navigate(String((cfg.input && cfg.input.value) || '').trim());
+    if (els.path && els.path.focus) els.path.focus();
+  }
+
+  function close() {
+    setErr('');
+    els.mask.classList.add('hidden');
+  }
+
+  function confirm() {
+    var p = String((els.path && els.path.value) || '').trim();
+    if (!p) { setErr('请输入或选择文件夹路径'); return; }
+    showLoading(true);
+    setErr('');
+    browse(p).then(function (d) {
+      if (cfg.input) cfg.input.value = d.path;
+      close();
+      if (cfg.onPick) cfg.onPick(d.path);
+    }).catch(function (e) {
+      setErr((e && e.message) || '该路径不可用');
+    }).then(function () { showLoading(false); });
+  }
+
+  function init(c) {
+    cfg.input = (c && c.input) || null;
+    cfg.onPick = (c && c.onPick) || null;
+    els.mask = $('pickerMask');
+    els.body = $('pickerBody');
+    els.path = $('pickerPath');
+    els.err = $('pickerErr');
+    els.up = $('pickerUp');
+    if (!els.mask || !els.body || !els.path) return;
+    els.up.addEventListener('click', goUp);
+    els.path.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); confirm(); }
+    });
+    els.mask.addEventListener('click', function (ev) { if (ev.target === els.mask) close(); });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && !els.mask.classList.contains('hidden')) close();
+    });
+    var bind = function (id, fn) { var b = $(id); if (b) b.addEventListener('click', fn); };
+    bind('pickCloseBtn', close);
+    bind('pickCancelBtn', close);
+    bind('pickOkBtn', confirm);
+    if (cfg.input) cfg.input.addEventListener('click', open);
+  }
+
+  root.Picker = { init: init, open: open, close: close };
+})(typeof self !== 'undefined' ? self : this);

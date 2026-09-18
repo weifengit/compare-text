@@ -662,6 +662,8 @@
     });
   }
   if (PdfView.init) PdfView.init({ left: $('pdfLeft'), right: $('pdfRight') });
+  // 对比源路径输入框：点击弹出文件夹选择
+  if (Picker && Picker.init) Picker.init({ input: srcPathInput, onPick: loadSrcPath });
 
   // ---------- 第一行按钮：隐藏/显示编辑区 + 折叠/展开相同行 ----------
   var foldEnabled = true;

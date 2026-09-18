@@ -23,6 +23,78 @@ var HOST = process.argv[3] || process.env.HOST || '0.0.0.0';
 var ROOT = __dirname;
 
 /** 取本机局域网 IPv4 地址（供打印，方便分享给他人） */
+var IS_WIN = process.platform === 'win32';
+
+function isDriveRoot(p) {
+  return IS_WIN && /^[A-Za-z]:[\\/]?$/.test(p);
+}
+
+/** 列出某目录下的子文件夹（带完整路径），按名称排序 */
+function listDirs(p, cb) {
+  fs.readdir(p, { withFileTypes: true }, function (err, entries) {
+    if (err) return cb(err);
+    var out = [];
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      if (!e.isDirectory()) continue;
+      if (IS_WIN && (e.name === 'System Volume Information' || e.name === '$RECYCLE.BIN')) continue;
+      out.push({ name: e.name, path: path.join(p, e.name) });
+    }
+    out.sort(function (a, b) { return a.name < b.name ? -1 : 1; });
+    cb(null, out);
+  });
+}
+
+/** Windows 盘符列表（fs.access 逐个字母探测，避免外调 WMI） */
+function listDrives(cb) {
+  if (!IS_WIN) return cb(null, [{ name: '/', path: '/' }]);
+  var letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  var out = [];
+  var idx = 0;
+  (function step() {
+    var L = letters[idx++];
+    if (!L) { out.sort(function (a, b) { return a.name < b.name ? -1 : 1; }); return cb(null, out); }
+    fs.access(L + ':\\', function (err) { if (!err) out.push({ name: L + ':', path: L + ':\\' }); step(); });
+  })();
+}
+
+/** 上一级目录；'' 表示无上级（盘符根 / 系统根），此时由 browse 回退到盘符列表 */
+function parentOf(bp) {
+  var resolved = path.resolve(bp);
+  if (IS_WIN) {
+    if (isDriveRoot(resolved)) return '';                              // C:\ → 上级是盘符列表
+    var dir = path.dirname(resolved);
+    return dir.replace(/[\\/]+$/, '');
+  }
+  if (resolved === '/') return '';
+  return path.dirname(resolved);
+}
+
+/** 目录浏览：供页面"对比源"文件夹选择弹层使用 */
+function browse(bp, cb) {
+  bp = String(bp || '').trim();
+  if (bp === '' || bp === '/' || bp === '\\') {
+    if (IS_WIN) listDrives(function (err, drives) {
+      if (err) return cb(err);
+      cb(null, { path: '', parent: '', kind: 'drives', dirs: drives });
+    });
+    else listDirs('/', function (err, ds) {
+      if (err) return cb(err);
+      cb(null, { path: '/', parent: '', kind: 'dir', dirs: ds });
+    });
+    return;
+  }
+  fs.stat(bp, function (err, st) {
+    if (err || !st.isDirectory()) return cb(new Error('目录不存在：' + bp));
+    var abs = path.resolve(bp);
+    listDirs(abs, function (err2, ds) {
+      if (err2) return cb(err2);
+      cb(null, { path: abs, parent: parentOf(abs), kind: 'dir', dirs: ds });
+    });
+  });
+}
+
+/** 取本机局域网 IPv4 地址（供打印，方便分享给他人） */
 function lanIPv4() {
   var nets = os.networkInterfaces();
   var out = [];
@@ -80,6 +152,13 @@ function handleApi(req, res) {
       dirs.sort();
       files.sort(function (a, b) { return a.name < b.name ? -1 : 1; });
       sendJson(res, 200, { ok: true, path: lp, dirs: dirs, files: files });
+    });
+    return;
+  }
+  if (u.pathname === '/api/browse') {
+    browse(q.get('path') || '', function (err, data) {
+      if (err) return sendJson(res, 400, { ok: false, error: String((err && err.message) || err) });
+      sendJson(res, 200, Object.assign({ ok: true }, data));
     });
     return;
   }

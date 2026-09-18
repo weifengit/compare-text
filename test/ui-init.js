@@ -97,6 +97,7 @@ vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/normalize.js'), 'utf8'), sandbox, { filename: 'normalize.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/compute.js'), 'utf8'), sandbox, { filename: 'compute.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/source-api.js'), 'utf8'), sandbox, { filename: 'source-api.js' });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/picker.js'), 'utf8'), sandbox, { filename: 'picker.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/filterbar.js'), 'utf8'), sandbox, { filename: 'filterbar.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/pdfview.js'), 'utf8'), sandbox, { filename: 'pdfview.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/syncscroll.js'), 'utf8'), sandbox, { filename: 'syncscroll.js' });
@@ -274,6 +275,12 @@ check('对比源：加载路径后 FilterBar 刷新不抛错（fetch 桩）', fu
   els['srcPathInput'].value = '/tmp/对比源';
   els['srcLoadBtn'].dispatch('click');
   if (els['srcPathCur'].textContent !== '/tmp/对比源') throw new Error('当前路径应显示');
+});
+check('对比源：点击路径输入框弹出文件夹选择弹层', function () {
+  els['srcPathInput'].dispatch('click');
+  if (els['pickerMask'].classList.contains('hidden')) throw new Error('点击输入框应打开弹层');
+  els['pickCloseBtn'].dispatch('click');
+  if (!els['pickerMask'].classList.contains('hidden')) throw new Error('关闭后弹层应隐藏');
 });
 check('隐藏/显示编辑区按钮切换', function () {
   els['toggleEditorsBtn'].dispatch('click');

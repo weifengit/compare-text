@@ -27,7 +27,7 @@
   <aside class="sidebar" id="sidebar" aria-label="工具栏">
     <div class="sb-title">对比源</div>
     <div class="src-block">
-      <input id="srcPathInput" type="text" placeholder="输入绝对路径，如 /Users/xxx/对比源" spellcheck="false">
+      <input id="srcPathInput" type="text" placeholder="点击选择对比源文件夹" title="点击弹出文件夹选择" spellcheck="false" readonly>
       <button id="srcLoadBtn" class="btn" title="加载该路径下的子文件夹与文件">加载</button>
     </div>
     <div class="src-cur" id="srcPathCur">未设置对比源</div>
@@ -91,12 +91,33 @@
 </div>
 </div>
 
+<!-- 对比源文件夹选择弹层 -->
+<div class="picker-mask" id="pickerMask" hidden>
+  <div class="picker" role="dialog" aria-label="选择对比源文件夹">
+    <div class="picker-head">
+      <span>选择文件夹</span>
+      <button id="pickCloseBtn" class="btn" type="button" title="关闭">×</button>
+    </div>
+    <div class="picker-nav">
+      <button id="pickerUp" class="btn" type="button" title="上一级">⬆ 上级</button>
+      <input id="pickerPath" type="text" placeholder="输入或粘贴绝对路径后回车" spellcheck="false">
+    </div>
+    <div class="picker-body" id="pickerBody"></div>
+    <div class="picker-err hidden" id="pickerErr"></div>
+    <div class="picker-foot">
+      <button id="pickCancelBtn" class="btn" type="button">取消</button>
+      <button id="pickOkBtn" class="btn primary" type="button">选择此文件夹</button>
+    </div>
+  </div>
+</div>
+
 <script src="lib/pdf.min.js"></script>
 <script src="lib/codemirror.min.js"></script>
 <script src="lib/diff.min.js"></script>
 <script src="src/normalize.js"></script>
 <script src="src/compute.js"></script>
 <script src="src/source-api.js"></script>
+<script src="src/picker.js"></script>
 <script src="src/filterbar.js"></script>
 <script src="src/pdfview.js"></script>
 <script src="src/syncscroll.js"></script>
