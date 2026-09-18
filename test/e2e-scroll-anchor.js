@@ -89,7 +89,12 @@ function check(name, actual, expected, tol) {
 
 function cleanup() {
   try { if (ws) ws.close(); } catch (e) {}
-  try { if (edgeProc) cp.execSync('taskkill /PID ' + edgeProc.pid + ' /T /F 2>nul'); } catch (e2) {}
+  try {
+    if (edgeProc) {
+      if (process.platform === 'win32') cp.execSync('taskkill /PID ' + edgeProc.pid + ' /T /F 2>nul');
+      else edgeProc.kill();                     // macOS/Linux：直接 kill（2>nul 在非 Windows 会留一个 nul 垃圾文件）
+    }
+  } catch (e2) {}
   try { if (serverProc) serverProc.kill(); } catch (e3) {}
   try { fs.rmSync(FIX, { recursive: true, force: true }); } catch (e4) {}
   try { fs.rmSync(path.join(require('os').tmpdir(), 'edge-e2e-profile-' + process.pid), { recursive: true, force: true }); } catch (e5) {}

@@ -28,6 +28,8 @@
   var panelText = { L: null, R: null };   // 每侧已提取的 PDF 原文缓存（差异标注独立坐标系用，clearPanel 失效）
   var renderGen = { L: 0, R: 0 };         // 每侧渲染代数：renderAll 递增，renderPage 回调据此丢弃过期页面
   var renderTasks = { L: {}, R: {} };     // 每侧每页在途 RenderTask（重绘前取消，避免叠加/残留）
+  var posIndex = { L: null, R: null };    // 每侧 行号→像素 索引（惰性构建，二分查找零 DOM 读；布局变化后失效重建）
+  var posVer = { L: 0, R: 0 };            // 位置代数：任何布局/内容变化递增，丢弃陈旧索引
   var zoomFactor = 1;                     // auto 模式手动缩放系数（Ctrl+滚轮调节，setMode 复位）
   var afterRender = null;                 // 每轮渲染完成回调（app.js 刷新缩放提示）
   var W = (typeof window !== 'undefined') ? window : null;
@@ -68,6 +70,7 @@
     textItems[side] = null;
     pageVps[side] = [];
     panelText[side] = null;
+    posIndex[side] = null; posVer[side]++;
   }
 
   function clear(side) {
@@ -159,6 +162,7 @@
     cancelRenderTasks(side);                 // 取消上一轮在途渲染，防止残留叠加
     p.innerHTML = '';
     pageVps[side] = [];
+    posIndex[side] = null; posVer[side]++;   // 布局将变化：丢弃旧行位索引
     var total = pdf.numPages;
     var gets = [];
     for (var i = 1; i <= total; i++) {
@@ -173,6 +177,7 @@
         if (!pages[n]) continue;                // 单页失败忽略
         try { renderPage(side, pages[n], scales[n], gen); } catch (e) { /* 忽略 */ }
       }
+      posIndex[side] = null; posVer[side]++;   // 渲染完成：新 wrap 已就位，下次访问重建索引
       try { if (afterRender) afterRender(side); } catch (e2) { /* 忽略 */ }
     });
   }
@@ -509,6 +514,7 @@
     return chain.then(function () {
       if (loadSeq[side] !== token) return;   // 已被新加载取代：不写入过期文本项
       textItems[side] = pages;
+      posIndex[side] = null; posVer[side]++; // 文本项就绪：行位索引重建（首次访问时）
       applyHighlights(side);
       applyTextLayer(side);                  // 文本项就绪后补绘可选中文本层
     }).catch(function (e) { /* 标注收集失败不致命：仅失去高亮与文本层，但留痕便于排查 */
@@ -524,106 +530,96 @@
   function isLoaded(side) { return !!docs[side]; }
 
   // ---------- 行号 ↔ 滚动像素（内容锚定协同滚动用：PDF 页数/字号/版式差异不影响行号坐标系） ----------
+  // 性能关键：惰性构建“每行一个条目”的 {line, top, h} 索引（渲染/收集/缩放/互换后失效重建），
+  // 滚动帧内三个访问器全走二分查找 + 浮点插值，零 DOM 读取（旧实现逐项 rect + 矩阵乘法，是卡顿主因）。
 
   /** 页面 wrap 在面板滚动内容中的顶部坐标（rect 法，与 padding/margin/定位无关） */
   function wrapTopInPanel(p, wrap) {
     try { return wrap.getBoundingClientRect().top - p.getBoundingClientRect().top + p.scrollTop; }
     catch (e) { return null; }
   }
-  function findWrap(p, pageNum) {
+  function invalidatePos(side) { posIndex[side] = null; posVer[side]++; }
+
+  /** 构建行位索引：逐页取 wrap 顶（每页一次 rect 读，仅重渲染后发生），对每个文本行记录
+   *  最靠上的片段的 top 与字身×1.2 行高；行号按 top 升序。未就绪（无面板/无文本项/页未渲染）→ null */
+  function buildPosIndex(side) {
+    var p = panels[side], pages = textItems[side], vps = pageVps[side] || [];
+    if (!p || !pages || !pages.length) return null;
+    var wraps = {};
     var kids = p.children || [];
     for (var i = 0; i < kids.length; i++) {
-      if (kids[i]._pageNum === pageNum) return kids[i];
+      if (kids[i]._pageNum) wraps[kids[i]._pageNum] = wrapTopInPanel(p, kids[i]);
     }
-    return null;
-  }
-  /** 目标行号的代表文本项：优先精确起始行，否则其后最近项，再否则之前最近项 */
-  function findBox(side, line) {
-    var pages = textItems[side];
-    if (!pages) return null;
-    var prev = null;
-    for (var i = 0; i < pages.length; i++) {
-      var pg = pages[i];
+    var seen = {};                                // line → 该行最靠上片段的条目
+    for (var pi = 0; pi < pages.length; pi++) {
+      var pg = pages[pi];
+      var vp = vps[pg.page - 1];
+      if (!vp) continue;
+      var wt = wraps[pg.page];
+      if (wt == null) continue;
       for (var j = 0; j < pg.boxes.length; j++) {
         var b = pg.boxes[j];
-        if (b.line === line) return { page: pg.page, b: b };
-        if (b.line < line) prev = { page: pg.page, b: b };
-        else return { page: pg.page, b: b };
+        var tm = mulMat(vp.transform, b.transform);
+        var fontH = Math.max(1, Math.hypot(tm[2], tm[3]));
+        var top = wt + (tm[5] - fontH);
+        var cur = seen[b.line];
+        if (!cur || top < cur.top) seen[b.line] = { line: b.line, top: top, h: fontH * 1.2 };
       }
     }
-    return prev;
+    var arr = [];
+    for (var k in seen) arr.push(seen[k]);
+    if (!arr.length) return null;
+    arr.sort(function (a, b2) { return a.top - b2.top || a.line - b2.line; });
+    return arr;
   }
-  /** 文本项在面板滚动内容中的顶部像素与字身高度 */
-  function boxTopPx(side, pageNum, b) {
-    var vps = pageVps[side] || [];
-    var vp = vps[pageNum - 1];
-    var p = panels[side];
-    if (!vp || !p) return null;
-    var wrap = findWrap(p, pageNum);
-    if (!wrap) return null;
-    var wt = wrapTopInPanel(p, wrap);
-    if (wt == null) return null;
-    var tm = mulMat(vp.transform, b.transform);
-    var fontH = Math.max(1, Math.hypot(tm[2], tm[3]));
-    return { top: wt + (tm[5] - fontH), fontH: fontH };
+  function posIndexOf(side) {
+    if (!posIndex[side]) posIndex[side] = buildPosIndex(side);
+    return posIndex[side];
+  }
+  /** 二分：最后一个 top <= px 的条目索引；无 → -1 */
+  function idxAtPx(arr, px) {
+    var lo = -1, hi = arr.length - 1;
+    while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (arr[mid].top <= px) lo = mid; else hi = mid - 1; }
+    return lo;
+  }
+  /** 二分：最后一个 line <= e 的条目索引（e 可浮点）；无 → -1 */
+  function idxAtLine(arr, e) {
+    var lo = -1, hi = arr.length - 1;
+    while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (arr[mid].line <= e) lo = mid; else hi = mid - 1; }
+    return lo;
   }
 
-  /** 行号 → 该文本行在面板滚动内容中的顶部像素（未加载/未收集/页未渲染 → null，调用方降级比例同步） */
+  /** 连续行位 → 面板滚动内容中的顶部像素（浮点插值：entry.top + 行内比例×行高；
+   *  未加载/未收集/页未渲染 → null，调用方降级比例同步） */
   function lineOffset(side, line) {
-    if (!panels[side] || !textItems[side]) return null;
-    var f = findBox(side, Math.max(1, Math.round(line)));
-    if (!f) return null;
-    var g = boxTopPx(side, f.page, f.b);
-    return g ? g.top : null;
+    var p = panels[side];
+    if (!p) return null;
+    var arr = posIndexOf(side);
+    if (!arr) return null;
+    var i = idxAtLine(arr, line);
+    if (i < 0) i = 0;                             // line 在首条目之前：按首条目斜率外推
+    var e = arr[i];
+    return e.top + (line - e.line) * e.h;
   }
   /** 行号 → 视觉行高（字身×1.2 近似行距；不可得 → null） */
   function lineHeightAtLine(side, line) {
-    if (!panels[side] || !textItems[side]) return null;
-    var f = findBox(side, Math.max(1, Math.round(line)));
-    if (!f) return null;
-    var g = boxTopPx(side, f.page, f.b);
-    return g ? g.fontH * 1.2 : null;
+    var p = panels[side];
+    if (!p) return null;
+    var arr = posIndexOf(side);
+    if (!arr) return null;
+    var i = idxAtLine(arr, line);
+    if (i < 0) i = 0;
+    return arr[i].h;
   }
-  /** 面板滚动像素 → 该处文本行号（取最后一个基线上沿 ≤ px 的文本项；页无文本回退前页末行） */
+  /** 面板滚动像素 → 该处文本行号（最后一个条目顶 ≤ px 的行的起始行号；px 在首页之上 → 首行） */
   function lineAtOffset(side, px) {
-    var p = panels[side], pages = textItems[side];
-    if (!p || !pages || !pages.length) return null;
-    var kids = p.children || [];
-    var wrap = null, wtop = 0;
-    for (var i = 0; i < kids.length; i++) {
-      var w = kids[i];
-      if (!w._pageNum) continue;
-      var t = wrapTopInPanel(p, w);
-      if (t == null) return null;
-      if (t <= px && (!wrap || t > wtop)) { wrap = w; wtop = t; }   // 最后一个 top<=px 的页（不依赖追加顺序）
-    }
-    if (!wrap) { var f0 = pages[0].boxes[0]; return f0 ? f0.line : 1; }   // px 在首页之上 → 首行
-    var pg = null;
-    for (i = 0; i < pages.length; i++) {
-      if (pages[i].page === wrap._pageNum) { pg = pages[i]; break; }
-    }
-    if (!pg || !pg.boxes.length) {                    // 该页无文本（图片页等）：回退到之前页的末行
-      var prevLine = pages[0].boxes[0] ? pages[0].boxes[0].line : 1;
-      for (i = 0; i < pages.length; i++) {
-        if (pages[i].page < wrap._pageNum && pages[i].boxes.length) {
-          prevLine = pages[i].boxes[pages[i].boxes.length - 1].line;
-        }
-      }
-      return prevLine;
-    }
-    var vps = pageVps[side] || [];
-    var vp = vps[pg.page - 1];
-    if (!vp) return pg.boxes[0].line;
-    var local = px - wtop;
-    var line = pg.boxes[0].line;
-    for (i = 0; i < pg.boxes.length; i++) {
-      var b = pg.boxes[i];
-      var tm = mulMat(vp.transform, b.transform);
-      var fontH = Math.max(1, Math.hypot(tm[2], tm[3]));
-      if (tm[5] - fontH <= local) line = b.line;      // 取最后一个行顶 ≤ 观察点的项
-      else break;
-    }
-    return line;
+    var p = panels[side];
+    if (!p) return null;
+    var arr = posIndexOf(side);
+    if (!arr) return null;
+    var i = idxAtPx(arr, px);
+    if (i < 0) return arr[0] ? arr[0].line : 1;
+    return arr[i].line;
   }
 
   root.PdfView = {

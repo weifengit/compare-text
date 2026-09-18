@@ -231,8 +231,8 @@
     }
     results.innerHTML =
       '<div class="grid">' +
-      '<div class="colhead">原文<em>Original</em></div>' +
-      '<div class="colhead">修改后<em>Modified</em></div>' +
+      '<div class="colhead">原文</div>' +
+      '<div class="colhead">修改后</div>' +
       '<div class="grid-body" id="leftBody">' + leftBody + '</div>' +
       '<div class="grid-body" id="rightBody">' + rightBody + '</div>' +
       '</div>';
@@ -287,8 +287,8 @@
     }
     results.innerHTML =
       '<div class="grid">' +
-      '<div class="colhead">原文（忽略换行）<em>按原行号标注</em></div>' +
-      '<div class="colhead">修改后（忽略换行）<em>按原行号标注</em></div>' +
+      '<div class="colhead">原文（标注）</div>' +
+      '<div class="colhead">修改后（标注）</div>' +
       '<div class="grid-body" id="leftBody">' + flowRowsHtml(flowLineRows(res.segsL)) + '</div>' +
       '<div class="grid-body" id="rightBody">' + flowRowsHtml(flowLineRows(res.segsR)) + '</div>' +
       '</div>';
@@ -876,6 +876,7 @@
     anchorCache = { res: lastResult, l2r: l2r, r2l: r2l };
     return anchorCache;
   }
+  /** 锚表插值（连续行位）：对浮点 line 线性插值、端点斜率1外推，不取整（worklist 144：去双重取整抖动） */
   function interpAnchor(arr, line) {
     if (!arr.length) return null;
     if (line < arr[0][0]) return line + (arr[0][1] - arr[0][0]);        // 首锚之前：斜率1外推
@@ -887,7 +888,7 @@
     if (!b) return line + (a[1] - a[0]);                                 // 末锚之后：斜率1外推
     if (b[0] === a[0]) return a[1];
     var t = (line - a[0]) / (b[0] - a[0]);
-    return Math.round(a[1] + t * (b[1] - a[1]));
+    return a[1] + t * (b[1] - a[1]);
   }
 
   // --- 各区块的 行号↔像素 适配器 ---
@@ -929,7 +930,8 @@
     return {
       side: side, space: 'text',
       lineAt: function (px) { var e = findByTop(ensure(), px); return e ? e.ls : null; },
-      offsetOf: function (line) { var e = findByLine(ensure(), line); return e ? e.top : null; },
+      // 连续行位：行首像素 + 行内比例 × 行高（lineAt 恒返回行首 → anchorOf 的 frac 即整行比例，往返一致）
+      offsetOf: function (line) { var e = findByLine(ensure(), line); return e ? e.top + (line - e.ls) * e.h : null; },
       lineH: function (line) { var e = findByLine(ensure(), line); return e ? e.h : null; }
     };
   }
@@ -944,9 +946,18 @@
         try { var pos = cm.coordsChar({ left: 0, top: px }, 'local'); return pos ? pos.line + 1 : null; }
         catch (e) { return null; }
       },
+      // 连续行位：floor 行首像素 + 行内比例 × 该行行高（lineAt 返回整数行 → 往返一致）
       offsetOf: function (line) {
-        try { var l = clampLine(line); return l ? cm.heightAtLine(l - 1, 'local') : null; }
-        catch (e) { return null; }
+        try {
+          var n = cm.lineCount ? cm.lineCount() : 0;
+          if (!n) return null;
+          var l = Math.floor(line);
+          if (l < 1) l = 1;
+          if (l > n) l = n;
+          var t = cm.heightAtLine(l - 1, 'local');
+          var b = l < n ? cm.heightAtLine(l, 'local') : t + (cm.defaultTextHeight ? cm.defaultTextHeight() : 20);
+          return t + (line - l) * Math.max(1, b - t);
+        } catch (e) { return null; }
       },
       lineH: function (line) {
         try {
@@ -985,34 +996,34 @@
     for (i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
     return starts;
   }
-  /** 行号+行内比例 → 字符偏移（float，允许落在行中任意字符间） */
-  function lineToChar(starts, textLen, line, frac) {
+  /** 连续行位 e（行号+行内比例，1基）→ 字符偏移（float，允许落在行中任意字符间） */
+  function lineToChar(starts, textLen, e) {
     var n = starts.length;
-    var idx = Math.round(line) - 1;
+    var idx = Math.floor(e) - 1;
     if (idx < 0) idx = 0;
     if (idx > n - 1) idx = n - 1;
+    var frac = e - (idx + 1);
     var end = idx + 1 < n ? starts[idx + 1] : textLen;
-    return starts[idx] + (frac || 0) * Math.max(0, end - starts[idx]);
+    return starts[idx] + Math.max(0, frac) * Math.max(0, end - starts[idx]);
   }
-  /** 字符偏移 → { line, frac }（该行号 + 行内比例） */
+  /** 字符偏移 → 连续行位 e */
   function charToLineFrac(starts, textLen, c) {
     var lo = 0, hi = starts.length - 1;
     while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (starts[mid] <= c) lo = mid; else hi = mid - 1; }
     var end = lo + 1 < starts.length ? starts[lo + 1] : textLen;
     var len = Math.max(1, end - starts[lo]);
-    return { line: lo + 1, frac: Math.max(0, Math.min(1, (c - starts[lo]) / len)) };
+    return (lo + 1) + Math.max(0, Math.min(1, (c - starts[lo]) / len));
   }
-  /** 行级互译（同 grid 现有逻辑）：行号经行锚表插值，保留行内比例 */
-  function translateLineMap(map, from, to, line, frac) {
+  /** 行级互译（同 grid 现有逻辑）：连续行位经行锚表线性插值（浮点，不取整） */
+  function translateLineMap(map, from, to, e) {
     var arr = from === 'L' ? map.line.l2r : map.line.r2l;
-    var l = interpAnchor(arr, line);
-    return l == null ? null : { line: l, frac: frac };
+    return interpAnchor(arr, e);
   }
-  /** 字符级互译：行号+行内比例 → 字符偏移 → 锚表 → 另一侧字符偏移 → 行号+行内比例 */
-  function translateCharMap(map, from, to, line, frac) {
+  /** 字符级互译：连续行位 → 字符偏移 → 锚表 → 另一侧字符偏移 → 连续行位 */
+  function translateCharMap(map, from, to, e) {
     var srcStarts = map.lineStarts[from], tgtStarts = map.lineStarts[to];
     var srcText = map.texts[from], tgtText = map.texts[to];
-    var c = lineToChar(srcStarts, srcText.length, line, frac);
+    var c = lineToChar(srcStarts, srcText.length, e);
     var arr = from === 'L' ? map.char.l2r : map.char.r2l;
     var c2 = interpAnchor(arr, c);
     if (c2 == null) return null;
@@ -1022,19 +1033,19 @@
    * 用对齐表互译：行级覆盖足够（行结构化内容，精确无漂移）优先行级；
    * 覆盖稀疏（段落重排，行已打散）则退到字符级；行级表存在但覆盖低时仍可作兜底。
    */
-  function translateWithMap(map, from, to, line, frac) {
+  function translateWithMap(map, from, to, e) {
     if (map.line) {
       if (map.line.coverage >= 0.3) {
-        var r = translateLineMap(map, from, to, line, frac);
-        if (r) return r;
+        var r = translateLineMap(map, from, to, e);
+        if (r != null) return r;
       } else if (map.char) {
-        var c = translateCharMap(map, from, to, line, frac);
-        if (c) return c;
+        var c = translateCharMap(map, from, to, e);
+        if (c != null) return c;
       }
-      var r2 = translateLineMap(map, from, to, line, frac);
-      if (r2) return r2;
+      var r2 = translateLineMap(map, from, to, e);
+      if (r2 != null) return r2;
     }
-    if (map.char) return translateCharMap(map, from, to, line, frac);
+    if (map.char) return translateCharMap(map, from, to, e);
     return null;
   }
   /** 编辑器文本坐标系对齐表（行级+字符级）：随对比结果（lastResult）重建 */
@@ -1075,32 +1086,31 @@
       && pdfCharMap.texts.R === editorR.getValue());
   }
 
-  function crossTranslate(srcA, oA, anchor) {
+  function crossTranslate(srcA, oA, e) {
     var from = srcA.side, to = oA.side;
     var srcPdf = srcA.space === 'pdf', tgtPdf = oA.space === 'pdf';
     var r;
     // PDF↔PDF：恒用 PDF 原文表（修整/手工改编辑器后依然对得准 —— 最高优先级）
     if (srcPdf && tgtPdf && pdfCharMap) {
-      r = translateWithMap(pdfCharMap, from, to, anchor.line, anchor.frac);
-      if (r) return r;
+      r = translateWithMap(pdfCharMap, from, to, e);
+      if (r != null) return r;
     }
     // 编辑↔编辑：用对比结果表（编辑器文本坐标系）
     if (!srcPdf && !tgtPdf && editorCharMap) {
-      r = translateWithMap(editorCharMap, from, to, anchor.line, anchor.frac);
-      if (r) return r;
+      r = translateWithMap(editorCharMap, from, to, e);
+      if (r != null) return r;
     }
     // 混合（PDF↔编辑）：仅当编辑器文本与 PDF 原文一致时字符级坐标才成立
     if ((srcPdf !== tgtPdf) && pdfCharMap && pdfMapMatchesEditors) {
-      r = translateWithMap(pdfCharMap, from, to, anchor.line, anchor.frac);
-      if (r) return r;
+      r = translateWithMap(pdfCharMap, from, to, e);
+      if (r != null) return r;
     }
     // 降级：行级对齐表（grid 行配对），无表则 null → 比例兜底
     var ac = anchorArrays();
-    var l = interpAnchor(from === 'L' ? ac.l2r : ac.r2l, anchor.line);
-    return l == null ? null : { line: l, frac: anchor.frac };
+    return interpAnchor(from === 'L' ? ac.l2r : ac.r2l, e);
   }
   if (SyncScroll && SyncScroll.setTranslator) {
-    SyncScroll.setTranslator(function (srcA, oA, anchor) { return crossTranslate(srcA, oA, anchor); });
+    SyncScroll.setTranslator(function (srcA, oA, e) { return crossTranslate(srcA, oA, e); });
   }
 
   function rebindScrollSync() {
