@@ -613,6 +613,7 @@
     if (tidyBefore) { var tb = tidyBefore.left; tidyBefore.left = tidyBefore.right; tidyBefore.right = tb; }
     if (FilterBar.selectFile) { FilterBar.selectFile('L', pR, true); FilterBar.selectFile('R', pL, true); }
     if (PdfView.swap) PdfView.swap();
+    if (DocxView.swap) DocxView.swap();
     pdfCharMap = null; updatePdfMapMatches();   // PDF 互换：作废旧字符表，待重算
     updateTabTitle();
     toast('已左右互换');
@@ -635,6 +636,7 @@
     tidyBefore = null;
     setTidyBtnMode(false);
     if (PdfView.clear) PdfView.clear();
+    if (DocxView.clear) DocxView.clear();
     updatePdfArea();                             // 清除后无 PDF → 隐藏主区域3
     pdfCharMap = null; updatePdfMapMatches();
     if (FilterBar.setFields) FilterBar.setFields([]);
@@ -696,7 +698,8 @@
   // 未就绪的 pdfarea 高度而把 appEl 永久缩矮（“清空全部”被侧边栏 overflow:hidden 裁掉）。
   // 自然布局在显示后自动对齐（同 HEAD 行为）；resize/拖拽/折叠等已有调用点负责显式重排。
   function updatePdfArea() {
-    var hasPdf = !!(PdfView.isLoaded && (PdfView.isLoaded('L') || PdfView.isLoaded('R')));
+    var hasPdf = !!(PdfView.isLoaded && (PdfView.isLoaded('L') || PdfView.isLoaded('R')))
+      || !!(DocxView.isLoaded && (DocxView.isLoaded('L') || DocxView.isLoaded('R')));
     pdfareaEl.classList.toggle('hidden', !hasPdf);
   }
   function refitPageToPdf() {
@@ -812,6 +815,7 @@
     Source.fileUrl(absPath).then(function (url) {
       if (my !== fileSeq[side] || sw !== switchSeq) return;
       if (/\.pdf$/i.test(absPath)) {
+      if (DocxView.clear) DocxView.clear(side);  // 与 Word 面板互斥：同侧只保留一种渲染
       // 单次取文档：渲染 + 提词复用同一份，提词成功后立即写编辑器
       var load = PdfView.load(side, url, my);
       if (load && load.then) {
@@ -826,11 +830,33 @@
           if (my === fileSeq[side] && sw === switchSeq) toast('加载 PDF 失败：' + ((err && err.message) || err), true);
         });
       }
+      } else if (/\.docx$/i.test(absPath)) {
+      if (PdfView.clear) PdfView.clear(side);    // 与 PDF 面板互斥
+      fetch(url).then(function (r) { return r.arrayBuffer(); }).then(function (buf) {
+        if (my !== fileSeq[side] || sw !== switchSeq) return;
+        // 渲染（DocxView.load）与提词（extractText）并行，同一份 ArrayBuffer
+        return Promise.all([DocxView.load(side, buf, my), DocxView.extractText(buf)]);
+      }).then(function (rs) {
+        var text = rs && rs[1];
+        if (my !== fileSeq[side] || sw !== switchSeq || !text) return;
+        if (FilterBar.setFields) FilterBar.setFields(PdfView.segmentFields ? PdfView.segmentFields(text) : []);
+        if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
+        updatePdfArea();                         // docx 已渲染 → 重算主区域3 显隐
+      }).catch(function (err) {
+        if (my === fileSeq[side] && sw === switchSeq) toast('加载 Word 文档失败：' + ((err && err.message) || err), true);
+      });
+      } else if (/\.doc$/i.test(absPath)) {
+      // 旧版二进制 .doc 不支持（无法可靠解析），明确提示，不显示乱码
+      if (PdfView.clear) PdfView.clear(side);
+      if (DocxView.clear) DocxView.clear(side);
+      updatePdfArea();
+      toast('暂不支持旧版 .doc 格式，请先用 Word/WPS 另存为 .docx', true);
       } else {
       fetch(url).then(function (r) { return r.text(); }).then(function (text) {
         if (my !== fileSeq[side] || sw !== switchSeq) return;
         if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
         if (PdfView.clear) PdfView.clear(side);
+        if (DocxView.clear) DocxView.clear(side);
         updatePdfArea();                         // 非 PDF 文件：该侧无 PDF → 重算主区域3 显隐
       }).catch(function (err) {
         if (my === fileSeq[side] && sw === switchSeq) toast('读取文件失败：' + ((err && err.message) || err), true);
@@ -856,6 +882,7 @@
     });
   }
   if (PdfView.init) PdfView.init({ left: $('pdfLeft'), right: $('pdfRight') });
+  if (typeof DocxView !== 'undefined' && DocxView.init) DocxView.init({ left: $('pdfLeft'), right: $('pdfRight') });
   // 对比源路径输入框：点击弹出文件夹选择
   if (Picker && Picker.init) Picker.init({ input: srcPathInput, onPick: loadSrcPath });
 
@@ -1376,8 +1403,20 @@
             }).catch(function () {});
           }
         }
-        else if (PdfView.clear) { PdfView.clear(side); updatePdfArea(); }
-      } else if (PdfView.clear) { PdfView.clear(side); updatePdfArea(); }
+        else if (/\.docx$/i.test(path)) {
+          // 恢复 docx 面板（文本已在 tab state 的编辑器里，这里只重渲染主区域3）。
+          // IIFE 固定本轮的 side/path：var 提升后回调里读到的是循环结束值
+          (function (sd, pth) {
+            if (PdfView.clear) PdfView.clear(sd);
+            Source.fileUrl(pth).then(function (url) {
+              return fetch(url).then(function (r) { return r.arrayBuffer(); });
+            }).then(function (buf) {
+              return DocxView.load(sd, buf, my);
+            }).then(function () { updatePdfArea(); }).catch(function () {});
+          })(side, path);
+        }
+        else { if (PdfView.clear) PdfView.clear(side); if (DocxView.clear) DocxView.clear(side); updatePdfArea(); }
+      } else { if (PdfView.clear) PdfView.clear(side); if (DocxView.clear) DocxView.clear(side); updatePdfArea(); }
     }
   }
   function restorePdfFiles(tab) {
@@ -1385,6 +1424,7 @@
     if (!tab.srcRoot && !tab.dir && !tab.fileL && !tab.fileR) {  // 空白 tab：清空选择与 PDF
       if (FilterBar.selectFile) { FilterBar.selectFile('L', '', true); FilterBar.selectFile('R', '', true); }
       if (PdfView.clear) PdfView.clear();
+      if (DocxView.clear) DocxView.clear();
       updatePdfArea();
       return;
     }

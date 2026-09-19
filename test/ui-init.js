@@ -100,6 +100,7 @@ vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/source-api.js'), 'u
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/picker.js'), 'utf8'), sandbox, { filename: 'picker.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/filterbar.js'), 'utf8'), sandbox, { filename: 'filterbar.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/pdfview.js'), 'utf8'), sandbox, { filename: 'pdfview.js' });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/docxview.js'), 'utf8'), sandbox, { filename: 'docxview.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/syncscroll.js'), 'utf8'), sandbox, { filename: 'syncscroll.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/tabs.js'), 'utf8'), sandbox, { filename: 'tabs.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/app.js'), 'utf8'), sandbox, { filename: 'app.js' });

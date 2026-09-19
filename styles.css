@@ -383,6 +383,9 @@ html, body {
 .pdf-hl.ad { background: rgba(80, 170, 80, .40); }
 .pdf-hl.ch { background: rgba(235, 180, 50, .40); }
 .pdf-loading, .pdf-error { color: #e8eaed; text-align: center; padding: 30px 10px; font-size: 13px; }
+/* Word 文档（docx-preview 输出）：页面外观对齐 .pdf-page（白底 + 阴影 + 居中） */
+.docx-host .docx-wrapper { background: transparent; padding: 0; }
+.docx-host .docx-wrapper > section.docx { margin: 0 auto 10px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
 
 /* 全屏：挤压隐藏顶部第三行、主区域1 与 主区域2 */
 .app.pdf-focus .statusbar,

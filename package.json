@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node serve.js",
     "test": "node test/smoke.js && node test/integration.js && node test/ui-init.js",
-    "test:all": "node test/smoke.js && node test/integration.js && node test/api-test.js && node test/scroll-rebind.js && node test/pdf-multipage-switch.js",
+    "test:all": "node test/smoke.js && node test/integration.js && node test/api-test.js && node test/scroll-rebind.js && node test/pdf-multipage-switch.js && node test/docxview.js",
+    "test:docx": "node test/docxview.js",
     "test:ui": "node test/ui-init.js",
     "test:pdf": "node test/pdf-multipage-switch.js",
     "tauri": "tauri",
