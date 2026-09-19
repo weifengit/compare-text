@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "文件对比 · File Compare（离线）",
+        "title": "文件对比 · File Compare",
         "width": 1280,
         "height": 800,
         "resizable": true,
