@@ -570,6 +570,12 @@
     for (var k in seen) arr.push(seen[k]);
     if (!arr.length) return null;
     arr.sort(function (a, b2) { return a.top - b2.top || a.line - b2.line; });
+    // ★ 无条件插入顶部虚拟锚点（只要首行 line >= 1，即文档不是从 0 行位开始）。
+    //   旧条件 `arr[0].top > 0.5` 在首行紧贴页顶（页边距极小）时不插入 → 该侧 e 最小值为 1，
+    //   而另一侧 e 最小值为 0 → 到顶时两侧行位差 1，另一侧永远滚不到 0 像素处，
+    //   表现为“差一点才能看到顶部”（约 30–60px，即首行上方页边距）。
+    //   改成 `line >= 1` 后两侧都从 0 行位开始，顶部像素严格对齐。
+    if (arr[0].line >= 1) arr.unshift({ line: 0, top: 0, h: arr[0].h || 16 });
     return arr;
   }
   function posIndexOf(side) {
@@ -589,19 +595,28 @@
     return lo;
   }
 
-  /** 连续行位 → 面板滚动内容中的顶部像素（浮点插值：entry.top + 行内比例×行高；
-   *  未加载/未收集/页未渲染 → null，调用方降级比例同步） */
+  /** 连续行位 → 面板滚动内容中的顶部像素（浮点插值：entry.top + 行内比例×行间距）。
+   *  ★ 行间距 = 下一行条目 top − 本行条目 top，与 anchorOf 的 nextOffset 严格对应。
+   *    旧实现用“字身高度”当行距（PDF 行距常大于字身），使 anchorOf∘lineOffset 不互逆，
+   *    被驱动方反复修正 → 抖动 / 到底卡死 / 到顶回弹。
+   *  未加载/未收集/页未渲染 → null，调用方降级比例同步。 */
   function lineOffset(side, line) {
     var p = panels[side];
     if (!p) return null;
     var arr = posIndexOf(side);
     if (!arr) return null;
     var i = idxAtLine(arr, line);
-    if (i < 0) i = 0;                             // line 在首条目之前：按首条目斜率外推
+    if (i < 0) i = 0;                             // line 在首条目之前：按首条目间距外推
     var e = arr[i];
-    return e.top + (line - e.line) * e.h;
+    var span = e.h;
+    if (i + 1 < arr.length) {
+      var gap = arr[i + 1].top - e.top;
+      if (gap > 0) span = gap;
+    }
+    return e.top + (line - e.line) * span;
   }
-  /** 行号 → 视觉行高（字身×1.2 近似行距；不可得 → null） */
+  /** 行号 → 视觉行高。★ 用实际行间距（下一行条目 top − 本行 top）；末行回退到字身×1.2。
+   *  与 lineOffset 保持同一口径，确保 anchorOf 中 frac 计算与 lineOffset 的 span 一致。 */
   function lineHeightAtLine(side, line) {
     var p = panels[side];
     if (!p) return null;
@@ -609,6 +624,10 @@
     if (!arr) return null;
     var i = idxAtLine(arr, line);
     if (i < 0) i = 0;
+    if (i + 1 < arr.length) {
+      var gap = arr[i + 1].top - arr[i].top;
+      if (gap > 0) return gap;
+    }
     return arr[i].h;
   }
   /** 面板滚动像素 → 该处文本行号（最后一个条目顶 ≤ px 的行的起始行号；px 在首页之上 → 首行） */

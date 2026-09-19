@@ -888,9 +888,14 @@
     anchorCache = { res: lastResult, l2r: l2r, r2l: r2l };
     return anchorCache;
   }
-  /** 锚表插值（连续行位）：对浮点 line 线性插值、端点斜率1外推，不取整（worklist 144：去双重取整抖动） */
+  /** 锚表插值（连续行位）：对浮点 line 线性插值、端点斜率1外推，不取整（worklist 144：去双重取整抖动）。
+   *  ★ 顶部虚拟第 0 行特殊处理：line <= 0 时直接返回 0。
+   *    因 char 坐标系没有"文档边界之上"这一坐标点（charToLineFrac(0) 恒返回 1），
+   *    若不加保护，源到顶（e=0）时目标会被映射到首行行首（页边距下沿），永远到不了页边界。 */
   function interpAnchor(arr, line) {
     if (!arr.length) return null;
+    // 顶部虚拟第 0 行：两侧对齐到 0 行位（文档顶 = 各自页边距起点）
+    if (line <= 0) return 0;
     if (line < arr[0][0]) return line + (arr[0][1] - arr[0][0]);        // 首锚之前：斜率1外推
     var lo = 0, hi = arr.length - 1;
     while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (arr[mid][0] <= line) lo = mid; else hi = mid - 1; }
@@ -1064,9 +1069,26 @@
   /**
    * 用对齐表互译：行级覆盖足够（行结构化内容，精确无漂移）优先行级；
    * 覆盖稀疏（段落重排，行已打散）则退到字符级；行级表存在但覆盖低时仍可作兜底。
+   *
+   * ★ 关键：虚拟第 0 行（e < 1）直接映射，不进入任何行级/字符级互译。
+   *   原因：char 坐标系里 c=0 表示"第 1 行第 1 字符"，charToLineFrac(c=0) 恒返回 1，
+   *   会把"文档边界"错误映射到"首行行首"（页边距下沿）。任何 PDF 顶部都有页边距，
+   *   源到顶（e=0）时目标就会停在首行上沿、永远滚不到边界。
+   *   e < 1 直接返回 e，让两侧虚拟第 0 行按各自页边距比例同步（通常两侧页边距接近，
+   *   视觉上完全对齐到边界）。这是"右侧差一点才能看到顶部"的根因修复。
    */
   function translateWithMap(map, from, to, e) {
+    if (e < 1) return e;
     if (map.line) {
+      var arr = from === 'L' ? map.line.l2r : map.line.r2l;
+      if (arr && arr.length) {
+        var firstSrc = arr[0][0];
+        var lastSrc = arr[arr.length - 1][0];
+        if (e < firstSrc || e > lastSrc) {
+          var rBoundary = translateLineMap(map, from, to, e);
+          if (rBoundary != null) return rBoundary;
+        }
+      }
       if (map.line.coverage >= 0.3) {
         var r = translateLineMap(map, from, to, e);
         if (r != null) return r;
@@ -1139,7 +1161,17 @@
     }
     // 降级：行级对齐表（grid 行配对），无表则 null → 比例兜底
     var ac = anchorArrays();
-    return interpAnchor(from === 'L' ? ac.l2r : ac.r2l, e);
+    var arr = from === 'L' ? ac.l2r : ac.r2l;
+    // ★ 空表留痕：flow 模式 / 未产生对齐锚点时，会频繁走这条路径退化为比例同步——
+    //   若控制台频繁打印该警告，说明 diff 结果里 lineAnchors/charAnchors 未正确填充，
+    //   需检查 worker 那边的计算，而非在协同滚动侧继续调参。
+    if (!arr.length) {
+      if (typeof console !== 'undefined' && console.warn) {
+        console.warn('[sync] 对齐锚点为空，退化为比例同步:', from, '→', to);
+      }
+      return null;
+    }
+    return interpAnchor(arr, e);
   }
   if (SyncScroll && SyncScroll.setTranslator) {
     SyncScroll.setTranslator(function (srcA, oA, e) { return crossTranslate(srcA, oA, e); });

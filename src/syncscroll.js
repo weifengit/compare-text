@@ -9,47 +9,47 @@
  *    setTranslator 注册的换算函数互译（返回连续行位）。页数/字号/版式差异不影响对照；
  *    无适配器/行号不可得时降级为比例同步。
  *
- * 多层面控制（杜绝跳页/抖动/回弹/卡死，worklist 144）：
- *  ① 连续行位：锚点与像素互转全程不取整（offsetOf 接受浮点行位），消除双重取整造成的 1 行级跳变抖动。
- *  ② 手势模型：driving/driven —— 被驱动方整个手势内不反客为主，杜绝 A↔B 震荡与“往下滚另一边往回弹”；
- *     idle 超时 / pointerdown / keydown 结束手势并重建基线。
- *  ③ 弹性跟随：目标单步推进 ≤ max(MIN, |源Δ行|×RATIO)，且方向单调（容差 TOL）——
- *     小滚不跳页（页眉/稀疏锚点错映射被截断为缓慢跟随），滚动条/翻页大跳完整跟随。
- *  ④ 边界滚轮：源贴边时用虚拟位置（可越过边界）继续驱动其它区，解决“一边到底另一边还剩内容却滚不动”。
+ * 多层面控制（杜绝跳页/抖动/回弹/卡死）：
+ *  ① 连续行位：锚点与像素互转全程不取整。
+ *  ② 手势模型：driving/driven —— 被驱动方整个手势内不反客为主。
+ *  ③ 弹性跟随：源移动时按步长钳制；源停止时允许目标继续收敛到位（不卡死）。
+ *  ④ 边界滚轮：源贴边时用虚拟位置继续驱动其它区。
  *
- * SyncScroll.rebind([el, ...])                            // 重新绑定（旧监听自动解绑）
- * SyncScroll.setAdapter(el, {side,lineAt,offsetOf,lineH}) // 注册内容锚适配器（全部可选）
- * SyncScroll.setTranslator(fn(srcA, oA, e))               // 左右互译：入参连续行位 e；返回 e'（浮点）/ {line,frac} / 行号 / null
+ * SyncScroll.rebind([el, ...])
+ * SyncScroll.setAdapter(el, {side,lineAt,offsetOf,lineH})
+ * SyncScroll.setTranslator(fn(srcA, oA, e))
  */
 (function (root) {
   'use strict';
 
-  var bound = [];        // [{el, onScroll, onWheel, onPointer}] 已绑定监听，便于解绑
-  var els = [];          // 当前分组（handler 闭包共享，避免旧监听引用过期数组）
-  var adapters = [];     // [{el, a}] 元素 → 内容锚适配器
+  var bound = [];
+  var els = [];
+  var adapters = [];
   var translator = null;
   var syncing = false;
   var rafPending = false;
   var rafSrc = null;
-  var rafPx = null;      // 显式源像素（边界滚轮的虚拟位置覆盖 scrollTop）
+  var rafPx = null;
 
-  // —— 手势状态（层2）——
-  var driving = null;    // 当前驱动元素
-  var driven = [];       // 本手势内被写入的目标元素：其 scroll 事件视为 echo，忽略
+  var driving = null;
+  var driven = [];
   var gestureTimer = null;
-  // 元素态统一用 Map（对象键）：普通对象键会坍缩成 "[object Object]" 使 6 区共享同一槽位
-  var lastKnownE = new Map();   // el → 最近一次同步所见连续行位（源与目标都更新，跨手势持久 → 手势首步增量可靠）
-  var lastTgtE = new Map();     // el → 目标最近一次被写入后的连续行位（钳制基线兜底）
-  var pendingVirtual = new Map(); // el → {px, t, dir} 边界滚轮产生的虚拟位置（TTL 内防原生回写覆写）
-  var keyHooked = false;   // 文档级 keydown 已挂过一次
+  var lastKnownE = new Map();
+  var lastTgtE = new Map();
+  var pendingVirtual = new Map();
+  var keyHooked = false;
 
   // 弹性跟随参数（层3）。单位均为“连续行”。
-  var RATIO = 1.25;      // 目标单步可推进的上限倍数（相对源 Δ 行）
-  var MIN_LINES = 0.15;  // 每步最小推进（吸收亚行取整噪声）
-  var TOL = 0.2;         // 方向单调容差（允许的小幅回退/前进，吸收取整）
-  var JUMP_LINES = 10;   // 源单次移动超过该行数视为大跳（滚动条/翻页/程序化归位）→ 完整跟随不钳制
-  var GESTURE_IDLE = 200;// 手势空闲判定（ms）
-  var VIRTUAL_TTL = 200; // 边界虚拟位置有效时长（ms）
+  var RATIO = 1.25;
+  var MIN_LINES = 0.15;
+  var TOL = 0.2;
+  var JUMP_LINES = 10;
+  var GESTURE_IDLE = 200;
+  var VIRTUAL_TTL = 200;
+  // 像素级差距阈值：目标与理想位置像素差距 ≥ 该值 → 直接完整跟随（防卡死/防跳变）。
+  var PX_GAP_BYPASS = 200;
+  // 源行位变化低于该值视为“源基本停止”——不再钳制，允许目标收敛（关键修复）。
+  var IDLE_DELTA = 0.3;
 
   var raf = (typeof window !== 'undefined' && window.requestAnimationFrame)
     ? function (fn) { return window.requestAnimationFrame(fn); }
@@ -64,11 +64,6 @@
 
   // ---------- 层1：连续行位互转 ----------
 
-  /** 元素视口顶部像素 → 连续行位 e（行号 + 行内比例）；不可得 → null。
-   *  适配器可提供 nextOffset(line)（下一行条目的顶部像素）：
-   *  行位在“本行顶 → 下一行顶”区间内线性插值，绝不越过下一行 —— 消除 PDF 页间/大空白区
-   *  造成的行位不单调（源滚过空白时 e 不应反跳，见 worklist 145 抖动根因）。
-   *  末行无 nextOffset → 按行高外推（供层4 边界滚轮虚拟位置继续驱动）。 */
   function anchorOf(el, a, px) {
     if (!a || !a.lineAt) return null;
     var line = null;
@@ -85,14 +80,13 @@
         try { no = a.nextOffset(line); } catch (e4) { /* 忽略 */ }
         if (no != null && no > off) {
           var f2 = (px - off) / (no - off);
-          if (f2 < frac) frac = f2;         // 取更小者：间隙区按下一行顶插值，不越界
+          if (f2 < frac) frac = f2;
         }
       }
     }
     return line + Math.max(0, frac);
   }
 
-  /** 连续行位 e → 目标像素（跨侧经 translator 互译）；不可得 → null */
   function targetOf(oA, srcA, e) {
     if (!oA || !oA.offsetOf) return null;
     var e2 = e;
@@ -119,8 +113,6 @@
     if (gestureTimer) clearTimeout(gestureTimer);
     gestureTimer = setTimeout(clearGesture, GESTURE_IDLE);
   }
-  /** 手势开始：登记驱动源、清空被驱动集合。行位基线（lastKnownE/lastTgtE）跨手势持久，
-   *  不在此重置 —— 一次性程序化跳转/返回原位的首个事件才能算出真实增量。 */
   function initGesture(el) {
     driving = el;
     driven = [];
@@ -129,22 +121,25 @@
 
   // ---------- 层3：弹性钳制 ----------
 
-  /** 目标理想行位 → 钳制到 [方向单调 + 弹性步长] 区间内的连续行位；不可得 → null。
-   *  基线取目标“当前实际行位”（被外部滚动后也正确），而非记忆里的旧值。 */
   function clampTarget(o, oA, idealPx, srcDelta) {
     var cur = anchorOf(o, oA, o.scrollTop);
     if (cur == null) { cur = lastTgtE.has(o) ? lastTgtE.get(o) : 0; }
     else { lastTgtE.set(o, cur); }
     var eIdeal = anchorOf(o, oA, idealPx);
     if (eIdeal == null) return null;
-    // 大跳（滚动条/翻页/程序化归位）：单次移动远超手势步长，弹性钳制反而把目标
-    // 卡在半路（如重置到顶后右面板停在中间），此时信任源直接完整跟随理想行位。
+    // 大跳（滚动条/翻页/程序化归位）：完整跟随
     if (Math.abs(srcDelta) >= JUMP_LINES) return eIdeal;
+    // 像素差距大：完整跟随
+    if (Math.abs(idealPx - o.scrollTop) >= PX_GAP_BYPASS) return eIdeal;
+    // ★ 关键修复：源基本停止时不做弹性钳制，直接完整跟随。
+    //   触发场景：源已到边界（视口不动，srcDelta=0），但目标还没到位——
+    //   原逻辑走 else 分支把目标限在 cur±TOL 内，导致目标卡在半路、上不去/下不来，
+    //   视觉上就是“抖动”。
+    if (Math.abs(srcDelta) < IDLE_DELTA) return eIdeal;
     var step = Math.max(MIN_LINES, Math.abs(srcDelta) * RATIO);
     var lo, hi;
-    if (srcDelta > 0) { lo = cur - TOL; hi = cur + step; }          // 下滚：只许小幅回退
-    else if (srcDelta < 0) { lo = cur - step; hi = cur + TOL; }     // 上滚：只许小幅前进
-    else { lo = cur - TOL; hi = cur + TOL; }
+    if (srcDelta > 0) { lo = cur - TOL; hi = cur + step; }
+    else { lo = cur - step; hi = cur + TOL; }
     return Math.max(lo, Math.min(hi, eIdeal));
   }
 
@@ -153,13 +148,13 @@
   function applySync(src, pxOverride) {
     if (!src) return;
     var max = src.scrollHeight - src.clientHeight;
-    if (max <= 0) return;                            // 驱动元素本身无可滚范围
+    if (max <= 0) return;
     var px = (pxOverride != null) ? pxOverride : src.scrollTop;
-    var ratio = max > 0 ? px / max : 0;              // 比例兜底（虚拟 px 可 >1 → 目标随之越过自身 max）
+    var ratio = max > 0 ? px / max : 0;
     var srcA = adapterOf(src);
     var e = anchorOf(src, srcA, px);
     var srcDelta = 0;
-    var clamp = false;                               // 无历史基线（首帧）→ 完整对齐，不钳制
+    var clamp = false;
     if (e != null) {
       if (lastKnownE.has(src)) { srcDelta = e - lastKnownE.get(src); clamp = true; }
       lastKnownE.set(src, e);
@@ -169,23 +164,23 @@
       var o = els[i];
       if (o === src) continue;
       var omax = o.scrollHeight - o.clientHeight;
-      if (omax <= 0) continue;                       // 目标元素无可滚范围，跳过
+      if (omax <= 0) continue;
       var oA = adapterOf(o);
       var ideal = (e != null) ? targetOf(oA, srcA, e) : null;
-      if (ideal == null) ideal = ratio * omax;       // 无锚信息 → 比例兜底
+      if (ideal == null) ideal = ratio * omax;
       var target = Math.max(0, Math.min(omax, ideal));
-      if (clamp && e != null && oA && oA.offsetOf) { // 弹性钳制：有行位信息时覆盖理想位置
+      if (clamp && e != null && oA && oA.offsetOf) {
         var tgtE = clampTarget(o, oA, ideal, srcDelta);
         if (tgtE != null) {
           var t2 = oA.offsetOf(tgtE);
           if (t2 != null) target = Math.max(0, Math.min(omax, t2));
         }
       }
-      if (Math.abs(o.scrollTop - target) < 0.5) continue;   // 已到位则跳过，终止级联
+      if (Math.abs(o.scrollTop - target) < 0.5) continue;
+      if (driven.indexOf(o) === -1) driven.push(o);
       o.scrollTop = target;
-      if (driven.indexOf(o) === -1) driven.push(o);          // 标记被驱动：其 echo scroll 不反驱
       var oe2 = oA ? anchorOf(o, oA, o.scrollTop) : null;
-      lastKnownE.set(o, (oe2 != null) ? oe2 : e);            // 目标也记最后位置（跨手势）
+      lastKnownE.set(o, (oe2 != null) ? oe2 : e);
       lastTgtE.set(o, (oe2 != null) ? oe2 : (lastTgtE.has(o) ? lastTgtE.get(o) : 0));
     }
     syncing = false;
@@ -193,8 +188,8 @@
 
   function scheduleSync(src, px) {
     rafSrc = src;
-    if (px != null) rafPx = px;
-    if (rafPending) return;                          // 同帧合并：只同步一次
+    rafPx = (px != null) ? px : null;
+    if (rafPending) return;
     rafPending = true;
     raf(function () {
       rafPending = false;
@@ -203,7 +198,7 @@
     });
   }
 
-  // ---------- 监听（scroll / wheel / pointerdown）----------
+  // ---------- 监听 ----------
 
   function makeScrollHandler(el) {
     return function () {
@@ -213,11 +208,11 @@
       var max = el.scrollHeight - el.clientHeight;
       var pinned = pv && now < pv.t && ((pv.dir > 0 && el.scrollTop >= max - 1) || (pv.dir < 0 && el.scrollTop <= 1));
       if (pv) {
-        if (pinned) { scheduleSync(el, pv.px); return; }   // 仍贴边 → 用虚拟位置，防止回写覆写
+        if (pinned) { scheduleSync(el, pv.px); return; }
         pendingVirtual.delete(el);
       }
-      if (driven.indexOf(el) !== -1) return;        // 本手势内被我们写入的目标：echo，忽略
-      if (driving !== el) initGesture(el);          // 新驱动源 → 重建基线
+      if (driven.indexOf(el) !== -1) return;
+      if (driving !== el) initGesture(el);
       else touchGesture();
       scheduleSync(el, null);
     };
@@ -229,17 +224,15 @@
       var max = el.scrollHeight - el.clientHeight;
       if (max <= 0) return;
       var dy = ev.deltaY;
-      if (ev.deltaMode === 1) dy *= 16;             // 行 → 像素
-      else if (ev.deltaMode === 2) dy *= (el.clientHeight || 600);  // 页 → 像素
+      if (ev.deltaMode === 1) dy *= 16;
+      else if (ev.deltaMode === 2) dy *= (el.clientHeight || 600);
       if (!dy) return;
       var atBottom = el.scrollTop >= max - 1 && dy > 0;
       var atTop = el.scrollTop <= 1 && dy < 0;
-      if (!atBottom && !atTop) {                    // 在范围内：交给原生滚动，scroll 事件驱动
+      if (!atBottom && !atTop) {
         if (pendingVirtual.has(el)) pendingVirtual.delete(el);
         return;
       }
-      // 推越边界：用虚拟位置（可越过 max / 0）继续驱动，源自身保持贴边。
-      // TTL 内后续滚轮基于上次虚拟位置累积，持续越过边界直至目标各自到 max
       var now = Date.now();
       var pv = pendingVirtual.get(el);
       var base = (pv && now < pv.t) ? pv.px : (atBottom ? max : el.scrollTop);
@@ -252,9 +245,9 @@
   }
 
   function makePointerHandler(el) {
-    return function () { clearGesture(); };        // 用户直接点击/拖拽该元素 → 结束旧手势
+    return function () { clearGesture(); };
   }
-  function onKeydown() { clearGesture(); }         // 键盘滚动同样结束旧手势
+  function onKeydown() { clearGesture(); }
 
   function rebind(list) {
     for (var i = 0; i < bound.length; i++) {
@@ -268,7 +261,6 @@
     bound = [];
     els = (list || []).filter(Boolean);
     clearGesture();
-    // 初始行位基线：以当前各元素位置起算（首个手势的增量由此而来，而非“未知→完整对齐”）
     for (var k = 0; k < els.length; k++) {
       var a0 = adapterOf(els[k]);
       var ae = a0 ? anchorOf(els[k], a0, els[k].scrollTop) : null;
