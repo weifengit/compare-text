@@ -134,10 +134,21 @@ fn api_read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| e.to_string())
 }
 
+/// 用系统默认浏览器打开外部链接（"请作者喝茶"等 target="_blank" 外链；WebView 不自动处理）。
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    open::that(url).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![api_list, api_browse, api_read_file])
+        .invoke_handler(tauri::generate_handler![
+            api_list,
+            api_browse,
+            api_read_file,
+            open_url
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
