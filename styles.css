@@ -178,6 +178,7 @@ html, body {
   visibility: visible;
   display: flex;                    /* 纵向布局：历史记录列表弹性撑满，清空按钮沉底 */
   flex-direction: column;
+  min-height: 0;
   transition: none;                 /* 初始无动画，避免加载闪烁 */
 }
 .sidebar.collapsed {
@@ -397,8 +398,9 @@ html, body {
   position: relative;
   margin: 14px 16px;
   --split: 50%;
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 0;
+  min-height: 0;                 /* ★ 关键：flex 子项默认 min-height:auto 会阻止收缩 */
+  overflow: hidden;              /* ★ 关键：不被列内内容撑开 */
   display: flex;
   flex-direction: column;
 }
@@ -723,4 +725,39 @@ html, body {
   .pdf-panels { grid-template-columns: 1fr; grid-template-rows: minmax(220px, 1fr) minmax(220px, 1fr); }
   .pdf-panel + .pdf-panel { border-left: none; border-top: 2px solid #ccd5e0; }
   .vsplit { display: none; }
+}
+
+/* ============================================================
+ * 侧边栏高度约束修复
+ * 症状：历史记录多时侧边栏被撑高，"清空全部"被推到视口之外。
+ * 根因：侧边栏没有独立高度约束，历史列表没有自身滚动。
+ * ============================================================ */
+
+/* 页面根容器：占满视口、按列布局、禁止被子内容撑高 */
+#appRoot {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;              /* ★ 关键：超出视口的部分不撑高页面 */
+}
+
+/* 历史列表：吃掉剩余空间，自身滚动，绝不撑高侧边栏 */
+#historyList {
+  flex: 1 1 0;                   /* ★ 关键：分配剩余空间 */
+  min-height: 0;                 /* ★ 关键：允许缩到比内容小 */
+  overflow-y: auto;              /* ★ 关键：历史多时自身出滚动条 */
+  overflow-x: hidden;
+}
+
+/* 清空按钮：固定在侧边栏可见底部，不被列表挤出 */
+#historyClear {
+  flex: 0 0 auto;                /* ★ 关键：不收缩、不增长 */
+  margin-top: auto;              /* 兜底：列表为空时也贴底 */
+}
+
+/* 侧边栏里的其他固定项（标题、切换按钮等）也不要被压缩 */
+#sidebarToggle,
+#sidebar > h3,
+#sidebar > .sidebar-title {
+  flex: 0 0 auto;
 }

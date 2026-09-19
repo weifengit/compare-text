@@ -701,10 +701,31 @@
   }
   function refitPageToPdf() {
     if (pdfFocus) return;                            // 全屏模式 PDF 不限高，无空档
-    if (pdfareaEl.classList.contains('hidden')) return;  // 主区域3 隐藏：无 PDF 底边可对齐
     if (!layoutEl.getBoundingClientRect || !pdfareaEl.getBoundingClientRect) return;  // 桩环境
-    appEl.style.minHeight = '';                      // 先还原自然布局（min-height:100vh 撑满视口）再量
+    appEl.style.minHeight = '';                      // 先还原自然布局再量
     appEl.style.height = '';
+
+    var pdfHidden = pdfareaEl.classList.contains('hidden');
+
+    // 情况 A：主区域 3 隐藏（未加载 PDF）→ 以主区域 2（#layout）底部作为页面最下方
+    // 做法：把 #appRoot 高度锁到视口高度；#layout flex:1 自然吃掉剩余空间，
+    //       其底部即视口底部，侧边栏（#layout 列内）的"清空全部"也贴到视口底。
+    if (pdfHidden) {
+      var vh = (typeof window !== 'undefined' && window.innerHeight)
+        || (document.documentElement && document.documentElement.clientHeight)
+        || 0;
+      if (vh > 0) {
+        appEl.style.minHeight = '0';
+        appEl.style.height = vh + 'px';
+      }
+      return;
+    }
+
+    // 情况 B：主区域 3 可见（已加载 PDF）→ 以主区域 3（#pdfarea）底部作为页面最下方
+    // 做法：量出 #layout 底与 #pdfarea 底的空档，把 #appRoot 高度缩短该空档，
+    //       使 #pdfarea 底正好贴视口底，侧边栏（#layout 内）也随 #layout 一起被压到 #pdfarea 上方。
+    //       CSS 已让 #layout 有 min-height:0 + overflow:hidden → 压缩时侧边栏内部由历史列表滚动，
+    //       不会再因内容撑开而破坏对齐。
     var gap = layoutEl.getBoundingClientRect().bottom - pdfareaEl.getBoundingClientRect().bottom;
     if (gap > 1) {
       appEl.style.minHeight = '0';
