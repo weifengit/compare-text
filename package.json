@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node serve.js",
     "test": "node test/smoke.js && node -e \"require('./test/integration.js')\" && node -e \"require('./test/ui-init.js')\"",
+    "tauri": "tauri",
     "dev:desktop": "tauri dev",
     "build:desktop": "tauri build"
   },

@@ -60,7 +60,7 @@ jobs:
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'compare-text v${{ github.ref_name }}'
+          releaseName: 'compare-text ${{ github.ref_name }}'
           releaseBody: '请填写本次发布说明'
           releaseDraft: true
           prerelease: false
