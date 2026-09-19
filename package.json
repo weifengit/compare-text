@@ -5,7 +5,10 @@
   "description": "离线文本对比工具（浏览器 / Tauri 桌面双模式）",
   "scripts": {
     "start": "node serve.js",
-    "test": "node test/smoke.js && node -e \"require('./test/integration.js')\" && node -e \"require('./test/ui-init.js')\"",
+    "test": "node test/smoke.js && node test/integration.js && node test/ui-init.js",
+    "test:all": "node test/smoke.js && node test/integration.js && node test/api-test.js && node test/scroll-rebind.js && node test/pdf-multipage-switch.js",
+    "test:ui": "node test/ui-init.js",
+    "test:pdf": "node test/pdf-multipage-switch.js",
     "tauri": "tauri",
     "dev:desktop": "tauri dev",
     "build:desktop": "tauri build"

@@ -4,6 +4,7 @@
  *   node serve.js            # 监听 0.0.0.0:3000，局域网内其他人可访问
  *   node serve.js 8080       # 自定义端口
  *   HOST=127.0.0.1 node serve.js   # 仅本机可访问
+ *   node serve.js build      # 重建 Tauri 打包用的前端目录 dist/（等价旧 build-web.js）
  *
  * 附加文件 API（供页面"对比源"读取本地文件系统，按绝对路径）：
  *   GET /api/list?path=<绝对路径>   → { ok, path, dirs:[name...], files:[{name,size,ext}] }
@@ -206,6 +207,21 @@ function start() {
   return server;
 }
 
-if (require.main === module) start();
+/** 重建 Tauri 打包用的前端目录 dist/（由 tauri.conf.json 的 beforeBuildCommand 自动调用）。用法：node serve.js build */
+function buildWeb() {
+  var DIST = path.join(ROOT, 'dist');
+  var ENTRIES = ['index.html', 'styles.css', 'lib', 'src'];
+  fs.rmSync(DIST, { recursive: true, force: true });
+  fs.mkdirSync(DIST, { recursive: true });
+  ENTRIES.forEach(function (name) {
+    fs.cpSync(path.join(ROOT, name), path.join(DIST, name), { recursive: true });
+  });
+  console.log('[build] dist/ 已生成：' + ENTRIES.join(', '));
+}
+
+if (require.main === module) {
+  if (process.argv[2] === 'build') buildWeb();
+  else start();
+}
 
 module.exports = { handleApi: handleApi, start: start, MIME: MIME, API_MIME: API_MIME };

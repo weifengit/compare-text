@@ -47,12 +47,12 @@
 
 ```bash
 npm install              # 首次：安装 @tauri-apps/cli
-node make-icon.js        # 首次或更换图标时：生成 icon.png
-npx tauri icon icon.png  # 由 icon.png 生成各尺寸图标（已生成过可跳过）
-npm run build:desktop    # = tauri build：自动先跑 build-web.js 生成 dist/，再编译 + 打包
+npm run build:desktop    # = tauri build：自动先跑 node serve.js build 生成 dist/，再编译 + 打包
 ```
 
-按平台取产物（见第 0 节表格）。`dist/` 由 `build-web.js` 在构建前自动生成，无需手动操作。
+图标已入库（`src-tauri/icons/`），无需生成；想换图标：准备一张 ≥512×512 的 PNG，执行 `npx tauri icon 你的图.png`。
+
+按平台取产物（见第 0 节表格）。`dist/` 由 `beforeBuildCommand`（`node serve.js build`）在构建前自动生成，无需手动操作。
 
 ### 想只出某一种安装包？
 
@@ -153,7 +153,7 @@ jobs:
           prerelease: false
 ```
 
-> `dist/` 由 `beforeBuildCommand`（`node build-web.js`）在 CI 里自动生成；图标已提交在 `src-tauri/icons/`，
+> `dist/` 由 `beforeBuildCommand`（`node serve.js build`）在 CI 里自动生成；图标已提交在 `src-tauri/icons/`，
 > 无需在 CI 里重新执行 `tauri icon`。
 
 ### CI 前要把这些提交进仓库
@@ -218,7 +218,7 @@ Linux 没有强制签名体系，AppImage/deb/rpm 直接分发即可。
 ## 6. 常见问题
 
 **`npx tauri icon` 报 "Couldn't recognize the current folder as a Tauri project"**
-→ `src-tauri/` 不存在或未初始化。初始化：`npx tauri init --ci --app-name compare-text --window-title "文件对比 · File Compare（离线）" --frontend-dist ../dist --dev-url http://localhost:3000 --before-dev-command "node serve.js" --before-build-command "node build-web.js"`。
+→ `src-tauri/` 不存在或未初始化。初始化：`npx tauri init --ci --app-name compare-text --window-title "文件对比 · File Compare（离线）" --frontend-dist ../dist --dev-url http://localhost:3000 --before-dev-command "node serve.js" --before-build-command "node serve.js build"`。
 
 **macOS "无法验证该 App"**
 → 见第 4 节：自测用右键→打开或 `xattr`；正式分发需签名 + 公证。

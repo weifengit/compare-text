@@ -117,7 +117,7 @@ html, body {
   padding: 3px 8px;
   border-radius: 6px;
 }
-.tea-link:hover { background: #eef4ff; text-decoration: underline; }
+.tea-link:hover { background: #eef4ff; }
 
 .chip {
   display: inline-flex;
@@ -215,7 +215,8 @@ html, body {
   align-items: center;
   gap: 16px;
   padding: 8px 16px;
-  background: #fbfcfd;
+  /* 底纹与 diff 内容呼应：左（删）红 → 右（增）绿，中间留白衬托居中统计 */
+  background: linear-gradient(90deg, var(--del-bg) 0%, #ffffff 50%, var(--add-bg) 100%);
   color: var(--muted);
   border-bottom: 1px solid var(--border);
   font-size: 12.5px;

@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "node serve.js",
-    "beforeBuildCommand": "node build-web.js"
+    "beforeBuildCommand": "node serve.js build"
   },
   "app": {
     "withGlobalTauri": true,
