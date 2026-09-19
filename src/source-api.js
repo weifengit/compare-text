@@ -57,7 +57,7 @@
       return tauriCore.invoke('api_read_file', { path: absPath }).then(function (bytes) {
         var m = /\.[A-Za-z0-9]+$/.exec(absPath);
         var type = (m && MIME[m[0].toLowerCase()]) || 'application/octet-stream';
-        return URL.createObjectURL(new Blob([bytes], { type: type }));
+        return URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: type }));
       });
     }
     return Promise.resolve('/api/file?path=' + encodeURIComponent(absPath));
