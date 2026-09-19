@@ -1,5 +1,7 @@
 # 文件对比 · Text Diff（离线 · 纯前端）
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 类似 Diffchecker 的本地文本对比工具：粘贴两段文字（或选择本地文件 / PDF），逐行 + 逐字符高亮差异，
 **纯本地计算**，不上传服务器。同一套代码既可跑在浏览器，也可打包成 macOS / Windows / Linux 桌面应用。
 
@@ -113,3 +115,20 @@ npm run build:desktop   # = tauri build：自动先 `node serve.js build` 生成
   此时结果区改为两侧各自的流水排版，不做行对齐，但左右列仍参与协同滚动。
 - CRLF/LF 无论是否勾选都会被统一（按 `\r\n|\r|\n` 拆行），勾选项用于显式声明。
 - 没有把它做成上传对比的服务器版：所有比较都在本机完成。
+
+## 支持作者
+
+如果这个工具帮到了你，欢迎请作者喝杯茶 ☕
+
+| 支付宝 | 微信 |
+| ------ | ---- |
+| <img src="docs/alipay.png" alt="支付宝收款码" height="200"> | <img src="docs/wechat.png" alt="微信收款码" height="200"> |
+
+## 开源协议
+
+本项目基于 [Apache License 2.0](LICENSE) 开源：可自由使用、修改、分发（含商用），
+分发时需保留版权声明与许可声明，修改过的文件需标注改动说明；
+协议同时包含专利授权条款，使用者发起专利诉讼将自动失去授权。
+软件按“现状”提供，不附带任何担保。
+
+第三方依赖遵循各自协议：jsdiff（BSD-3-Clause）、CodeMirror（MIT）、pdf.js（Apache-2.0），均打包在 `lib/` 内。

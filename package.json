@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "离线文本对比工具（浏览器 / Tauri 桌面双模式）",
+  "license": "Apache-2.0",
   "scripts": {
     "start": "node serve.js",
     "test": "node test/smoke.js && node test/integration.js && node test/ui-init.js",
