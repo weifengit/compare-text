@@ -1,6 +1,7 @@
 'use strict';
 /**
- * render.js — 无头渲染通道：一条命令产出一份对比报告（阶段 B：单对最小闭环）。
+ * render.js — 无头渲染通道：一条命令产出一份对比报告（单对 / 批量）。
+ * 批量：一份报告最多 10 对（C3），超出请拆成多个任务分别调用，本工具直接报错拒绝。
  * 从 tools/spike-capture.js 起步（CDP 连接、超时、看门狗、逐页滚动收敛等基础设施直接复用），
  * 驱动真实页面复用 src/ 同一套模块（Pipeline.loadSide / compare / DocxView / PdfView），不重写渲染逻辑。
  *
@@ -307,6 +308,14 @@ function addStats(stats, result) {
   if (!task || !Array.isArray(task.pairs) || !task.pairs.length) {
     process.stdout.write(JSON.stringify({ ok: false, output: null, stats: { pairs: 0, added: 0, removed: 0, changed: 0 },
       warnings: ['任务缺少非空 pairs 数组'] }) + '\n');
+    process.exit(1);
+  }
+  // C3 分卷：一份报告最多 10 对，超出由调用方切成多份（本工具不自行分卷，直接拒绝）
+  if (task.pairs.length > 10) {
+    var mCap = '一份报告最多 10 对（当前 ' + task.pairs.length + ' 对），请将任务拆成多份分别渲染';
+    process.stderr.write(mCap + '\n');
+    process.stdout.write(JSON.stringify({ ok: false, output: null, stats: { pairs: 0, added: 0, removed: 0, changed: 0 },
+      warnings: [mCap] }) + '\n');
     process.exit(1);
   }
   var output = path.resolve(task.output || 'report.html');

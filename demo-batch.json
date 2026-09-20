@@ -1,0 +1,9 @@
+{
+  "title": "批量对比示例（docx + pdf）",
+  "pairs": [
+    { "left": "/Users/sonoma/code/compare-text/demo/a.docx", "right": "/Users/sonoma/code/compare-text/demo/b.docx" },
+    { "left": "/Users/sonoma/code/compare-text/demo/a.pdf", "right": "/Users/sonoma/code/compare-text/demo/b.pdf" }
+  ],
+  "options": { "ignoreCase": true, "ignoreEol": true, "ignoreWhitespace": true, "ignoreNewline": true, "ignoreWidth": true, "ignorePunct": true },
+  "output": "/Users/sonoma/code/compare-text/demo/report-batch.html"
+}
