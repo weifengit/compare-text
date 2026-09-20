@@ -1,0 +1,18 @@
+{
+  "title": "文档修订对比（docx）",
+  "pairs": [
+    {
+      "left": "/Users/sonoma/code/compare-text/demo/a.docx",
+      "right": "/Users/sonoma/code/compare-text/demo/b.docx"
+    }
+  ],
+  "options": {
+    "ignoreCase": true,
+    "ignoreEol": true,
+    "ignoreWhitespace": true,
+    "ignoreNewline": true,
+    "ignoreWidth": true,
+    "ignorePunct": true
+  },
+  "output": "/Users/sonoma/code/compare-text/demo/report-docx.html"
+}

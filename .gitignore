@@ -26,3 +26,6 @@ icon.png
 
 # 验证钉子 / 无头渲染的临时产物
 .spike-out/
+
+# 无头渲染演示夹具与生成的报告（由 tools/make-demo.js 生成）
+demo/
