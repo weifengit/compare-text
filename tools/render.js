@@ -332,19 +332,32 @@ function addStats(stats, result) {
   }
   if (!up) throw new Error('serve.js 启动失败');
 
-  // headless Edge + CDP
-  var profile = path.join(os.tmpdir(), 'edge-render-' + process.pid);
-  edgeProc = cp.spawn(BROWSER, ['--headless=new', '--disable-gpu', '--no-first-run', '--hide-scrollbars',
-    '--window-size=1600,1400', '--remote-debugging-port=' + DBG_PORT, '--user-data-dir=' + profile,
-    'http://127.0.0.1:' + HTTP_PORT + '/'], { stdio: 'ignore' });
-  var pg = null;
-  for (i = 0; i < 60; i++) {
-    try {
-      var list = await fetchJson('http://127.0.0.1:' + DBG_PORT + '/json/list');
-      pg = (list || []).filter(function (t) { return t.type === 'page' && t.url.indexOf('127.0.0.1:' + HTTP_PORT) !== -1; })[0];
-      if (pg) break;
-    } catch (e) { /* 未就绪 */ }
-    await wait(300);
+  // headless Edge + CDP。沙箱环境（如 dsh 执行命令的沙箱）里不带 --no-sandbox 时，
+  // CDP 能连上（/json/list、WebSocket 均正常）但页面渲染进程不响应 Runtime.evaluate，
+  // 显式 Page.navigate 也可能不提交 → 一律带 --no-sandbox 启动（无头本地渲染的常规做法）。
+  function launchEdge(extraArgs) {
+    var profile = path.join(os.tmpdir(), 'edge-render-' + process.pid + (extraArgs.length ? '-ns' : ''));
+    edgeProc = cp.spawn(BROWSER, ['--headless=new', '--disable-gpu', '--no-first-run', '--hide-scrollbars',
+      '--window-size=1600,1400', '--no-sandbox', '--remote-debugging-port=' + DBG_PORT, '--user-data-dir=' + profile]
+      .concat(extraArgs, ['http://127.0.0.1:' + HTTP_PORT + '/']), { stdio: 'ignore' });
+    return (async function () {
+      for (var k = 0; k < 60; k++) {
+        if (edgeProc.exitCode !== null) return null;   // 进程已死（如被沙箱拦），不必干等
+        try {
+          var list = await fetchJson('http://127.0.0.1:' + DBG_PORT + '/json/list');
+          var t = (list || []).filter(function (x) { return x.type === 'page' && x.url.indexOf('127.0.0.1:' + HTTP_PORT) !== -1; })[0];
+          if (t) return t;
+        } catch (e) { /* 未就绪 */ }
+        await wait(300);
+      }
+      return null;
+    })();
+  }
+  var pg = await launchEdge([]);
+  if (!pg) {
+    log('浏览器首次启动未拿到页面目标，带 --no-sandbox 重试（兼容沙箱环境）');
+    try { if (edgeProc) edgeProc.kill(); } catch (e0) {}
+    pg = await launchEdge(['--no-sandbox']);
   }
   if (!pg) throw new Error('未拿到浏览器页面目标');
   ws = new WebSocket(pg.webSocketDebuggerUrl);
@@ -357,6 +370,12 @@ function addStats(stats, result) {
     }
   };
   log('CDP 已连接');
+
+  // ② 沙箱环境里初始导航可能从未提交（页面目标在但停在 about:blank），显式导航一次确保真正加载
+  try {
+    await cdpSend('Page.navigate', { url: 'http://127.0.0.1:' + HTTP_PORT + '/' }, 15000);
+    await wait(800);
+  } catch (e) { log('  !! 显式导航失败（不致命，继续等页面就绪）：' + e.message); }
 
   await poll('(typeof Pipeline!=="undefined")&&(typeof PdfView!=="undefined")&&!!document.querySelector(".CodeMirror")',
     function (v) { return v === true; }, 40, '页面脚本就绪');
