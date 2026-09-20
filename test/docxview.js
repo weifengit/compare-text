@@ -183,6 +183,11 @@ Object.defineProperty(El.prototype, 'innerHTML', {
   get: function () { return ''; },
   set: function (v) { if (v === '') this.childNodes = []; }   // 桩不解析 HTML，只支持清空
 });
+// 行位索引要量 rect：桩给出 {top, height}（top 为视口坐标 = 内容坐标 − 面板 scrollTop，与真实浏览器一致）
+El.prototype.getBoundingClientRect = function () {
+  var st = this._scrollOf ? this._scrollOf() : 0;
+  return { top: (this._contentTop || 0) - st, height: this._h || 0 };
+};
 
 /** paras: [[run 文本, ...], ...] → docx-preview 的 <section class="docx"> 下每段一个 <p>、每 run 一个 <span> */
 function mkRich(paras) {
@@ -222,6 +227,24 @@ function rawOf(paras) {
   return s;
 }
 var RP = mkRich([]).DocxView._pure;      // 纯函数无需 DOM，取一份复用
+
+/**
+ * 布局仿真（行位索引用例）：给面板及其 <p> 补上可测量尺寸 —— 面板 padding 10，段落自上而下各高 lineH，
+ * 段落 rect.top 随面板 scrollTop 平移（与真实浏览器一致）。返回段落数组，供用例改坐标（模拟缩放/重排）。
+ */
+function layout(panel, lineH, clientH) {
+  panel.clientHeight = (clientH === undefined) ? 400 : clientH;
+  panel.clientWidth = 600;
+  if (panel.scrollTop == null) panel.scrollTop = 0;
+  panel.getBoundingClientRect = function () { return { top: 0, height: panel.clientHeight }; };
+  var ps = panel.firstChild.querySelectorAll('p');
+  for (var i = 0; i < ps.length; i++) {
+    ps[i]._contentTop = 10 + i * lineH;
+    ps[i]._h = lineH;
+    ps[i]._scrollOf = (function (p) { return function () { return p.scrollTop || 0; }; })(panel);
+  }
+  return ps;
+}
 
 console.log('docxview\n');
 
@@ -289,6 +312,18 @@ check('缺少 mammoth 全局时给出明确错误', function () {
     function () { throw new Error('不应成功'); },
     function (e) { assert(/mammoth 未加载/.test(e.message), '错误信息不符：' + e.message); }
   );
+});
+
+check('错误提示 showError：面板红框统一带"Word 文档加载失败："前缀（供 app.js 复用，文案与 toast 一致）', function () {
+  var t = mkSandbox();
+  var P = mkPanels(t.sandbox.DocxView);
+  t.sandbox.DocxView.showError('L', '文件为空（0 字节）：a.docx —— 请确认文件已完整保存到本地');
+  assert(P.L.innerHTML.indexOf('pdf-error') >= 0, '应使用错误样式，实际：' + P.L.innerHTML);
+  assert(P.L.innerHTML.indexOf('Word 文档加载失败：文件为空（0 字节）：a.docx') >= 0, '文案不符：' + P.L.innerHTML);
+  t.sandbox.DocxView.showError('R', new Error('Corrupted zip'));      // Error 对象取 message
+  assert(P.R.innerHTML.indexOf('Word 文档加载失败：Corrupted zip') >= 0, 'Error 应取 message：' + P.R.innerHTML);
+  t.sandbox.DocxView.showError('L', '第二次覆盖');                     // 覆盖上一次，不叠加
+  assert(P.L.innerHTML.indexOf('第二次覆盖') >= 0 && P.L.innerHTML.indexOf('文件为空') < 0, '应覆盖旧提示：' + P.L.innerHTML);
 });
 
 // ---------- 差异标注 ----------
@@ -458,6 +493,83 @@ check('标注：swap 后两侧标注随文档一起对调', function () {
     // 左侧换成右侧文档（未加载 → 空面板），右侧接管原左侧文档与标注
     assert(pn.R.firstChild, '互换后右侧应有渲染内容');
     assert(pn.R.firstChild.querySelectorAll('p')[0].hasClass('docx-hl-rm'), '互换后标注应跟到右侧');
+  });
+});
+
+// ---------- 行号 ↔ 滚动像素（内容锚定协同滚动） ----------
+
+check('行位索引：段号 ↔ 像素互逆（含行内比例），顶部为虚拟第 0 行位', function () {
+  var D = mkRich([['A'], ['B'], ['C']]).DocxView, pn = mkRichPanels(D);
+  return D.load('L', buf1).then(function () {
+    D.setSourceText('L', rawOf([['A'], ['B'], ['C']]));   // 段落在第 1/3/5 行（段间空行）
+    layout(pn.L, 30);                                     // 面板 padding 10，段高 30 → 段顶 10/40/70
+    assert(D.lineOffset('L', 0) === 0, '文档边界（第 0 行位）应在 0px，实际 ' + D.lineOffset('L', 0));
+    assert(D.lineOffset('L', 1) === 10, '行 1（首段顶）应为 10px，实际 ' + D.lineOffset('L', 1));
+    assert(D.lineOffset('L', 3) === 40, '行 3（第 2 段顶）应为 40px，实际 ' + D.lineOffset('L', 3));
+    assert(D.lineOffset('L', 5) === 70, '行 5（第 3 段顶）应为 70px，实际 ' + D.lineOffset('L', 5));
+    assert(D.lineOffset('L', 1.5) === 25, '行内比例应线性插值（1.5 → 25px），实际 ' + D.lineOffset('L', 1.5));
+    assert(D.lineAtOffset('L', 0) === 0, '首段之上应为第 0 行位，实际 ' + D.lineAtOffset('L', 0));
+    assert(D.lineAtOffset('L', 10) === 1, '首段顶应为行 1，实际 ' + D.lineAtOffset('L', 10));
+    assert(D.lineAtOffset('L', 39) === 1, '第 2 段上一像素仍是行 1（空行只是行位占位），实际 ' + D.lineAtOffset('L', 39));
+    assert(D.lineAtOffset('L', 40) === 3, '第 2 段顶应为行 3，实际 ' + D.lineAtOffset('L', 40));
+    assert(D.lineAtOffset('L', 9999) === 5, '末尾以下应停在最后一段，实际 ' + D.lineAtOffset('L', 9999));
+    assert(D.lineHeight('L', 1) === 30, '行高应为下一段顶 − 本段顶 = 30，实际 ' + D.lineHeight('L', 1));
+    assert(D.nextLineOffset('L', 1) === 40, '下一段顶应为 40，实际 ' + D.nextLineOffset('L', 1));
+    assert(D.nextLineOffset('L', 5) === null, '末段无下一段 → null，实际 ' + D.nextLineOffset('L', 5));
+    assert(D.lineHeight('L', 5) === 30, '末段行高回退到段高，实际 ' + D.lineHeight('L', 5));
+  });
+});
+
+check('行位索引：像素随面板滚动平移（往返一致，不受 scrollTop 影响）', function () {
+  var D = mkRich([['A'], ['B']]).DocxView, pn = mkRichPanels(D);
+  return D.load('L', buf1).then(function () {
+    D.setSourceText('L', rawOf([['A'], ['B']]));
+    layout(pn.L, 30);
+    var off = D.lineOffset('L', 3);
+    pn.L.scrollTop = 25;                                  // 用户滚动后：rect 整体上移 25px
+    assert(D.lineOffset('L', 3) === off, '内容坐标不应随滚动变化：' + D.lineOffset('L', 3) + ' vs ' + off);
+    assert(D.lineAtOffset('L', 25) === 1, '滚动 25px 后视口顶仍是行 1（段顶 10 → 屏上 -15），实际 ' + D.lineAtOffset('L', 25));
+    assert(D.lineAtOffset('L', 40) === 3, '内容坐标 40 处应为行 3，实际 ' + D.lineAtOffset('L', 40));
+  });
+});
+
+check('行位索引：DOM 多出的段落不参与，后续段落的行号不错位', function () {
+  var D = mkRich([['A'], ['文本框里的内容'], ['B']]).DocxView, pn = mkRichPanels(D);
+  return D.load('L', buf1).then(function () {
+    D.setSourceText('L', rawOf([['A'], ['B']]));          // mammoth 只有 2 段 → 行 1/3
+    layout(pn.L, 30);                                     // 段顶 10/40/70（第 2 段 DOM 未被 mammoth 覆盖）
+    assert(D.lineOffset('L', 1) === 10, '行 1 应为第 1 段顶，实际 ' + D.lineOffset('L', 1));
+    assert(D.lineOffset('L', 3) === 70, '行 3 应对到第 3 个 DOM 段（第 2 段未配对，不占行号），实际 ' + D.lineOffset('L', 3));
+    assert(D.lineAtOffset('L', 70) === 3, '实际 ' + D.lineAtOffset('L', 70));
+  });
+});
+
+check('行位索引：面板隐藏/原文未登记/已清空 → null（降级比例同步）', function () {
+  var D = mkRich([['A']]).DocxView, pn = mkRichPanels(D);
+  return D.load('L', buf1).then(function () {
+    layout(pn.L, 30, 0);                                  // clientHeight = 0：面板隐藏（display:none）
+    assert(D.lineOffset('L', 1) === null, '面板隐藏时应为 null，实际 ' + D.lineOffset('L', 1));
+    assert(D.lineAtOffset('L', 0) === null, '面板隐藏时应为 null');
+    layout(pn.L, 30, 400);                                // 显示出来 → 同一次加载即可量出位置
+    assert(D.lineOffset('L', 1) === null, '原文未登记时仍应为 null，实际 ' + D.lineOffset('L', 1));
+    D.setSourceText('L', rawOf([['A']]));
+    assert(D.lineOffset('L', 1) === 10, '登记原文后应量出段顶，实际 ' + D.lineOffset('L', 1));
+    D.clear('L');
+    assert(D.lineOffset('L', 1) === null, '清空面板后应为 null，实际 ' + D.lineOffset('L', 1));
+  });
+});
+
+check('行位索引：标注重绘/换文档后失效重建（量到的是新坐标）', function () {
+  var D = mkRich([['hello world']]).DocxView, pn = mkRichPanels(D);
+  return D.load('L', buf1).then(function () {
+    D.setSourceText('L', rawOf([['hello world']]));
+    var ps = layout(pn.L, 30);
+    assert(D.lineOffset('L', 1) === 10, '初始段顶应为 10，实际 ' + D.lineOffset('L', 1));
+    ps[0]._contentTop = 4;                                // 模拟缩放/重排后段落位置变化
+    assert(D.lineOffset('L', 1) === 10, '未失效时沿用旧索引（同一帧内不重复量）');
+    D.setHighlight('L', { 1: 'rm' });                     // 标注重绘 → 索引失效
+    assert(D.lineOffset('L', 1) === 4, '重绘后应量出新坐标 4，实际 ' + D.lineOffset('L', 1));
+    assert(D._debug('L').posEntries === 2, '索引条目数应为 2（虚拟第 0 行位 + 1 段），实际 ' + D._debug('L').posEntries);
   });
 });
 

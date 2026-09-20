@@ -77,7 +77,9 @@ var sandbox = {
     return w;
   },
   fetch: function () {
+    // 与真实 Response 一致：带 ok/status（app.js 会先看 r.ok 再取 body，缺 ok 会被当成 HTTP 失败）
     return Promise.resolve({
+      ok: true, status: 200,
       json: function () {
         return Promise.resolve({ ok: true, dirs: ['子文件夹1'], files: [
           { name: 'a.txt', size: 3, ext: 'txt' }, { name: 'b.txt', size: 3, ext: 'txt' }

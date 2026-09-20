@@ -14,6 +14,10 @@
  * DocxView.isLoaded(side)                           // 该侧是否已加载 docx
  * DocxView.swap()                                   // 左右面板内容整体互换
  *
+ * 行号 ↔ 滚动像素（内容锚定协同滚动）：与 PdfView 同名同语义的 lineOffset / lineAtOffset /
+ * lineHeight / nextLineOffset，坐标系即上述 mammoth 原文行号 —— 于是 Word 面板与 PDF 面板一样
+ * 能被 SyncScroll 按"行"锚定（而非按比例），跨区滚动时与主区域1/2 对齐到同一文字行。
+ *
  * 差异标注：坐标系与主区域1 完全一致 —— 行号 = mammoth 提取文本的行号（mammoth 的段落
  * 收尾恒为 "\n\n"，故第 k 段（0 基）落在第 2k+1 行），映射语义也与主区域1 同源：
  *   'rm'|'ad'        整段涂色（该段即一行）；
@@ -23,8 +27,8 @@
  * （完全一致走零开销快路径，否则退化为序列 diff 对齐），未配对的段不标注，
  * 因此文档里存在提取器/渲染器覆盖范围不一致的内容（文本框等）时也不会整体错位。
  *
- * 降级说明：缩放控件/行号↔像素同步滚动仍为 PDF 专属能力，docx 面板不参与
- * （同步滚动自动退化为比例同步）；缩放固定为"适应宽度"（CSS zoom，内容超宽时缩小）。
+ * 降级说明：缩放控件仍为 PDF 专属能力，docx 面板不参与（缩放固定为"适应宽度"：
+ * CSS zoom，内容超宽时缩小）；行锚点信息缺失时（面板隐藏/文档未就绪）同步滚动自动退化为比例同步。
  */
 (function (root) {
   'use strict';
@@ -49,6 +53,7 @@
     bufs[side] = null;
     texts[side] = null;
     hlMaps[side] = {};
+    invalidatePos(side);                       // 行位索引随 DOM 一起作废
   }
 
   function clear(side) {
@@ -57,6 +62,14 @@
   }
 
   function isLoaded(side) { return !!bufs[side]; }
+
+  /** 在面板里显示加载失败提示（与渲染失败同一套样式）。
+   *  供 app.js 在"字节预检不通过、还没走到渲染"的失败路径上复用，
+   *  保证面板红框与上层 toast 是同一句文案，不会一处说原因、一处只说 Corrupted zip。 */
+  function showError(side, msg) {
+    var p = panels[side];
+    if (p) p.innerHTML = '<div class="pdf-error">Word 文档加载失败：' + ((msg && msg.message) || msg) + '</div>';
+  }
 
   /** 适应宽度：docx 页面宽度取自文档节设置，超过面板宽时整体缩小（zoom 参与布局，无底部留白） */
   function fitWidth(side) {
@@ -67,6 +80,7 @@
     var w = sec ? (sec.offsetWidth || 0) : 0;
     var cw = (p.clientWidth || 0) - 2;
     host.style.zoom = (w > 0 && cw > 0) ? Math.min(1, cw / w) : 1;
+    invalidatePos(side);                       // zoom 改变段落视觉坐标 → 行位索引重建
   }
 
   function load(side, arrayBuffer, token) {
@@ -89,7 +103,7 @@
       p.appendChild(host);
       fitWidth(side);
     }).catch(function (err) {
-      if (loadSeq[side] === token && p) p.innerHTML = '<div class="pdf-error">Word 文档加载失败：' + ((err && err.message) || err) + '</div>';
+      if (loadSeq[side] === token) showError(side, err);
       throw err;
     });
   }
@@ -321,6 +335,7 @@
     var host = hostOf(side);
     if (!host) return;
     clearPaint(side);
+    invalidatePos(side);       // 标注会包裹 span（padding:0 1px）改动 DOM：行位索引重建后再用
     var text = texts[side];
     if (text == null) return;
     var found = host.querySelectorAll('p'), els = [], domTexts = [], i;
@@ -356,6 +371,117 @@
   /** 该侧已登记的原文（未加载/未登记 → null）；与 PdfView.extractPanel 同形，便于上层统一处理 */
   function extractPanel(side) { return Promise.resolve(texts[side]); }
 
+  // ---------- 行号 ↔ 滚动像素（内容锚定协同滚动用；与 PdfView 同名同语义） ----------
+  // 坐标系 = texts[side]（mammoth 原文）行号，像素 = 面板滚动内容坐标。
+  // 段落行号只取"两端对齐成功"的段（与差异标注同一份对齐结果）→ 与标注同源，不会错位。
+  // 惰性构建 {line, top, h} 索引（渲染/标注/缩放后失效重建）：滚动帧内全走二分查找 + 浮点插值，
+  // 零 DOM 读取 —— 逐帧逐段 rect 的代价随段落数线性增长（与 PdfView 同一考量，故同样做索引）。
+
+  var posIndex = { L: null, R: null };
+
+  function invalidatePos(side) { posIndex[side] = null; }
+
+  /** 段落顶在面板滚动内容中的坐标：rect 差 + scrollTop（与 PdfView.wrapTopInPanel 严格同式，
+   *  故 .pdf-panel 的 padding 在两侧计入同一常量、锚点严格对齐；CSS zoom 已折算进 rect，无需特判） */
+  function topInPanel(p, el) {
+    try { return el.getBoundingClientRect().top - p.getBoundingClientRect().top + (p.scrollTop || 0); }
+    catch (e) { return null; }
+  }
+
+  /** 构建行位索引：逐段记录 {line, top, h} 并按键位升序。
+   *  未就绪（无面板/未加载/未登记原文/面板隐藏）→ null：调用方降级比例同步，且不缓存错索引 */
+  function buildPosIndex(side) {
+    var p = panels[side], host = hostOf(side), text = texts[side];
+    // 面板隐藏（display:none）时所有 rect 为 0：量出来的索引毫无意义，宁可不给
+    if (!p || !host || text == null || !p.getBoundingClientRect || !p.clientHeight) return null;
+    var found = host.querySelectorAll('p'), els = [], domTexts = [], i;
+    for (i = 0; i < found.length; i++) {
+      els.push(found[i]);
+      domTexts.push(normTab(found[i].textContent || ''));
+    }
+    var mParas = splitParas(text);
+    var pairs = alignParas(domTexts, mParas);
+    var arr = [];
+    for (i = 0; i < pairs.length; i++) {
+      var el = els[pairs[i][0]];
+      if (!el || !el.getBoundingClientRect) return null;
+      var top = topInPanel(p, el);
+      if (top == null) return null;
+      arr.push({ line: mParas[pairs[i][1]].line, top: top, h: el.getBoundingClientRect().height || 0 });
+    }
+    if (!arr.length) return null;
+    arr.sort(function (a, b) { return a.top - b.top || a.line - b.line; });
+    // 顶部虚拟锚点（与 PdfView 同）：首段之上（页边距）也算第 0 行位，
+    // 两侧到顶时"文档边界"才严格对齐，而不是各自停在首行上沿
+    if (arr[0].line >= 1) arr.unshift({ line: 0, top: 0, h: arr[0].h || 16 });
+    return arr;
+  }
+
+  function posIndexOf(side) {
+    if (!posIndex[side]) posIndex[side] = buildPosIndex(side);
+    return posIndex[side];
+  }
+
+  /** 二分：最后一个 top <= px 的条目索引；无 → -1 */
+  function idxAtPx(arr, px) {
+    var lo = -1, hi = arr.length - 1;
+    while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (arr[mid].top <= px) lo = mid; else hi = mid - 1; }
+    return lo;
+  }
+  /** 二分：最后一个 line <= e 的条目索引（e 可浮点）；无 → -1 */
+  function idxAtLine(arr, e) {
+    var lo = -1, hi = arr.length - 1;
+    while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (arr[mid].line <= e) lo = mid; else hi = mid - 1; }
+    return lo;
+  }
+
+  /** 连续行位 → 面板滚动内容中的顶部像素（行内比例线性插值）。
+   *  ★ 行间距取"下一段顶端 − 本段顶端"，与 anchorOf 的 nextOffset 严格对应（往返一致，不抖动）。
+   *  未就绪 → null（调用方降级比例同步） */
+  function lineOffset(side, line) {
+    var arr = posIndexOf(side);
+    if (!arr) return null;
+    var i = idxAtLine(arr, line);
+    if (i < 0) i = 0;                                     // 首条目之前：按首条目间距外推
+    var e = arr[i], span = e.h;
+    if (i + 1 < arr.length) {
+      var gap = arr[i + 1].top - e.top;
+      if (gap > 0) span = gap;
+    }
+    return e.top + (line - e.line) * span;
+  }
+
+  /** 行号 → 视觉行高（同一口径：下一段顶端 − 本段顶端；末段回退到段落高度） */
+  function lineHeightAtLine(side, line) {
+    var arr = posIndexOf(side);
+    if (!arr) return null;
+    var i = idxAtLine(arr, line);
+    if (i < 0) i = 0;
+    if (i + 1 < arr.length) {
+      var gap = arr[i + 1].top - arr[i].top;
+      if (gap > 0) return gap;
+    }
+    return arr[i].h;
+  }
+
+  /** 面板滚动像素 → 该处所在行号（最后一个条目顶 ≤ px 的行；px 在首段之上 → 第 0 行位） */
+  function lineAtOffset(side, px) {
+    var arr = posIndexOf(side);
+    if (!arr) return null;
+    var i = idxAtPx(arr, px);
+    if (i < 0) return arr[0] ? arr[0].line : 1;
+    return arr[i].line;
+  }
+
+  /** 下一段顶端像素（行位在 本段顶→下一段顶 间线性，绝不越过下一段；末段 → null 由调用方按行高外推） */
+  function nextLineOffset(side, line) {
+    var arr = posIndexOf(side);
+    if (!arr) return null;
+    var i = idxAtLine(arr, line);
+    if (i < 0) i = 0;
+    return (i + 1 < arr.length) ? arr[i + 1].top : null;
+  }
+
   /**
    * 左右面板内容整体互换（左右互换按钮）：ArrayBuffer 对调后就地重渲染，不重新取文件。
    * 两侧在途加载一律作废，防止回填覆盖互换结果。
@@ -369,6 +495,7 @@
     loadSeq.L++; loadSeq.R++;
     if (panels.L) panels.L.innerHTML = '';
     if (panels.R) panels.R.innerHTML = '';
+    invalidatePos('L'); invalidatePos('R');    // 面板 DOM 清空 → 两侧行位索引作废
     var bufL = bufs.L, bufR = bufs.R;
     var textL = texts.L, hlL = hlMaps.L, textR = texts.R, hlR = hlMaps.R;
     function restore(side, text, map) {          // load 清空后回填，再按互换后的映射重绘
@@ -391,13 +518,17 @@
 
   root.DocxView = {
     init: init, load: load, extractText: extractText, clear: clear,
-    isLoaded: isLoaded, swap: swap,
+    isLoaded: isLoaded, swap: swap, showError: showError,
     setSourceText: setSourceText, extractPanel: extractPanel, setHighlight: setHighlight,
+    // 行号 ↔ 滚动像素（供 app.js 的行锚定适配器使用；与 PdfView 同名同语义）
+    lineOffset: lineOffset, lineAtOffset: lineAtOffset, lineHeight: lineHeightAtLine,
+    nextLineOffset: nextLineOffset,
     // 仅诊断用：各内部分解状态（正常功能不依赖）
     _debug: function (side) {
       return {
         loaded: !!bufs[side], bytes: bufs[side] ? bufs[side].byteLength : 0, loadToken: loadSeq[side],
-        hasText: texts[side] != null, hlLines: Object.keys(hlMaps[side] || {}).length
+        hasText: texts[side] != null, hlLines: Object.keys(hlMaps[side] || {}).length,
+        posEntries: posIndex[side] ? posIndex[side].length : 0   // 已建立的行位索引条目数（0 = 尚未建立/不可用）
       };
     },
     // 仅供测试：纯函数（不碰 DOM），便于在无浏览器环境验证行号/对齐/偏移映射

@@ -383,69 +383,40 @@
       DocxView.setHighlight('L', maps.L);
       DocxView.setHighlight('R', maps.R);
     }
-    syncPdfTextAnnotations();
-    syncDocxAnnotations();
+    syncPanelTextAnnotations();
   }
 
-  // PDF 标注的行号坐标系 = PDF 原文行号。“修整”（或手工编辑）会改变编辑器文本的行号系，
-  // 使编辑器 diff 的行号与 PDF 原文错位（修整成 1 行后全部标到 PDF 第 1 行 → 标注失效）。
-  // 因此：凡已加载 PDF 且其原文与编辑器当前文本不一致，就用 PDF 原文 + 当前忽略选项另算一份
-  // diff（与区域1 同一数据流：grid 行 / flow 片段）覆盖该侧标注；一致时零额外开销。
-  var pdfAnnSeq = 0;
-  function syncPdfTextAnnotations() {
-    if (!PdfView.isLoaded || !PdfView.extractPanel || !PdfView.setHighlight) return;
-    var hasL = PdfView.isLoaded('L'), hasR = PdfView.isLoaded('R');
-    if (!hasL && !hasR) return;
-    var my = ++pdfAnnSeq;
+  // 主区域3 面板标注的行号坐标系 = 面板原文行号（PDF 的提取文本 / Word 的 mammoth 文本）。
+  // “修整”（或手工编辑）会改变编辑器文本的行号系，使编辑器 diff 的行号与面板原文错位
+  // （修整成 1 行后全部标到第 1 行 → 标注失效）。因此：凡该侧已加载面板且其原文与编辑器当前文本
+  // 不一致，就用面板原文 + 当前忽略选项另算一份 diff（与区域1 同一数据流：grid 行 / flow 片段）
+  // 覆盖该侧标注；一致时零额外开销。
+  // PDF 与 Word 面板在这一层完全同构（都有 extractPanel / setHighlight，同名同语义），故共用一条流程；
+  // 两者各自的字符对齐表也一并由此刷新（面板原文坐标系，供协同滚动互译）。
+  var panelAnnSeq = 0;
+  function syncPanelTextAnnotations() {
+    var vL = panelViewer('L'), vR = panelViewer('R');
+    if (!vL && !vR) return;
+    var my = ++panelAnnSeq;
     Promise.all([
-      hasL ? PdfView.extractPanel('L') : Promise.resolve(null),
-      hasR ? PdfView.extractPanel('R') : Promise.resolve(null)
+      vL ? vL.extractPanel('L') : Promise.resolve(null),
+      vR ? vR.extractPanel('R') : Promise.resolve(null)
     ]).then(function (txts) {
-      if (my !== pdfAnnSeq) return;                 // 已有更新的标注流程接管
+      if (my !== panelAnnSeq) return;                 // 已有更新的标注流程接管
       var tL = txts[0], tR = txts[1];
-      refreshPdfCharMap(tL, tR);                    // 先重建 PDF 字符对齐表（无论标注是否需校正）
-      var diffL = hasL && tL != null && tL !== editorL.getValue();
-      var diffR = hasR && tR != null && tR !== editorR.getValue();
-      if (!diffL && !diffR) return;                 // 编辑器即 PDF 原文：现有标注已正确
-      var r2 = runLocal({                           // PDF 原文的 diff（同步；文本量与 PDF 相当，可控）
+      refreshPdfCharMap(tL, tR);                      // 先重建面板字符对齐表（无论标注是否需校正）
+      var diffL = !!vL && tL != null && tL !== editorL.getValue();
+      var diffR = !!vR && tR != null && tR !== editorR.getValue();
+      if (!diffL && !diffR) return;                   // 编辑器即面板原文：现有标注已正确
+      var r2 = runLocal({                             // 面板原文的 diff（同步；文本量与面板文档相当，可控）
         left: tL == null ? '' : tL,
         right: tR == null ? '' : tR,
         options: readOptions()
       });
-      if (my !== pdfAnnSeq || !r2 || r2.error) return;
+      if (my !== panelAnnSeq || !r2 || r2.error) return;
       var maps = buildAnnotMaps(r2);
-      if (diffL) PdfView.setHighlight('L', maps.L);
-      if (diffR) PdfView.setHighlight('R', maps.R);
-    }).catch(function () { /* 提取失败：保留编辑器 diff 的标注 */ });
-  }
-
-  // Word 面板同理，只是"面板原文"由 DocxView（mammoth 提取）提供，坐标系即 mammoth 文本行号：
-  // 加载时编辑器文本就等于它，故只有"修整"/手工编辑后才需要重算。DocxView 的标注是同步落 DOM 的，
-  // 因此这里重算后直接 setHighlight 即完成重绘。
-  var docxAnnSeq = 0;
-  function syncDocxAnnotations() {
-    if (typeof DocxView === 'undefined' || !DocxView.isLoaded || !DocxView.setHighlight || !DocxView.extractPanel) return;
-    var hasL = DocxView.isLoaded('L'), hasR = DocxView.isLoaded('R');
-    if (!hasL && !hasR) return;
-    var my = ++docxAnnSeq;
-    Promise.all([
-      hasL ? DocxView.extractPanel('L') : Promise.resolve(null),
-      hasR ? DocxView.extractPanel('R') : Promise.resolve(null)
-    ]).then(function (txts) {
-      if (my !== docxAnnSeq) return;                 // 已有更新的标注流程接管
-      var tL = txts[0], tR = txts[1];
-      var diffL = hasL && tL != null && tL !== editorL.getValue();
-      var diffR = hasR && tR != null && tR !== editorR.getValue();
-      if (!diffL && !diffR) return;                  // 编辑器即 Word 原文：现有标注已正确
-      var r2 = runLocal({
-        left: tL == null ? '' : tL,
-        right: tR == null ? '' : tR,
-        options: readOptions()
-      });
-      if (my !== docxAnnSeq || !r2 || r2.error) return;
-      var maps = buildAnnotMaps(r2);
-      if (diffL) DocxView.setHighlight('L', maps.L);
-      if (diffR) DocxView.setHighlight('R', maps.R);
+      if (diffL) vL.setHighlight('L', maps.L);
+      if (diffR) vR.setHighlight('R', maps.R);
     }).catch(function () { /* 提取失败：保留编辑器 diff 的标注 */ });
   }
 
@@ -843,6 +814,22 @@
   } catch (e) {}
 
   var fileSeq = { L: 0, R: 0 };   // 每侧文件加载令牌：同侧新加载作废旧加载（两侧可并行互不干扰）
+  /** docx 字节预检：不通过时返回给用户看的文案，通过返回 null。
+   *  0 字节的 .docx 现实中并不少见（网盘/OneDrive 占位文件尚未下载到本地、文件仍在写入或同步中、
+   *  下载中断留下的空文件），但这份字节一路传到 JSZip 里只会抛一句
+   *  "End of data reached (data length = 0, asked index = 4). Corrupted zip ?"——看不出是文件没读到。
+   *  ZIP 文件头固定是 "PK"，据此把"空文件/不完整"和"根本不是 docx（.doc 改名、损坏）"分开说。
+   *  桩环境（单测传 {len:1,byteLength:100} 这类假 buffer）拿不到真实字节 → 只做长度判断。 */
+  function docxBytesError(buf, absPath) {
+    var n = (buf && buf.byteLength) || 0;
+    var name = String(absPath).replace(/^.*[\\/]/, '');
+    if (!n) return '文件为空（0 字节）：' + name + ' —— 请确认文件已完整保存到本地（网盘中的占位文件需先下载），再重新加载';
+    if (!(typeof ArrayBuffer !== 'undefined' && buf instanceof ArrayBuffer)) return null;
+    if (n < 4) return '文件不完整（仅 ' + n + ' 字节）：' + name + '，可能仍在写入或下载未完成';
+    var b = new Uint8Array(buf, 0, 2);
+    if (b[0] !== 0x50 || b[1] !== 0x4B) return '不是有效的 .docx（缺少 ZIP 文件头）：' + name + '，文件可能已损坏或是 .doc 改名而来';
+    return null;
+  }
   function loadFileToSide(side, absPath) {
     if (!absPath || !Source.fileUrl) return;
     var sw = switchSeq;                        // 快照：tab 切换作废在途加载
@@ -868,8 +855,23 @@
       }
       } else if (/\.docx$/i.test(absPath)) {
       if (PdfView.clear) PdfView.clear(side);    // 与 PDF 面板互斥
-      fetch(url).then(function (r) { return r.arrayBuffer(); }).then(function (buf) {
+      fetch(url).then(function (r) {
+        // 服务端出错时响应体是 JSON（如 404 {"ok":false,"error":"文件不存在"}），
+        // 直接把它当 docx 喂给 JSZip 只会得到 "Corrupted zip"，看不出是没读到文件
+        if (!r.ok) {
+          var m = 'HTTP ' + r.status + (r.status === 404 ? '（文件不存在，可能已被移动或删除）' : '');
+          if (DocxView.showError) DocxView.showError(side, m);
+          throw new Error(m);
+        }
+        return r.arrayBuffer();
+      }).then(function (buf) {
         if (my !== fileSeq[side] || sw !== switchSeq) return;
+        // 字节预检不通过就没必要渲染/提词：面板红框 + 抛给下面统一 toast，文案一致
+        var bad = docxBytesError(buf, absPath);
+        if (bad) {
+          if (DocxView.showError) DocxView.showError(side, bad);
+          throw new Error(bad);
+        }
         // 渲染（DocxView.load）与提词（extractText）并行，同一份 ArrayBuffer
         return Promise.all([DocxView.load(side, buf, my), DocxView.extractText(buf)]);
       }).then(function (rs) {
@@ -892,7 +894,10 @@
       updatePdfArea();
       toast('暂不支持旧版 .doc 格式，请先用 Word/WPS 另存为 .docx', true);
       } else {
-      fetch(url).then(function (r) { return r.text(); }).then(function (text) {
+      fetch(url).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status + (r.status === 404 ? '（文件不存在）' : ''));
+        return r.text();                        // 否则错误 JSON 会被当成文件内容灌进编辑器
+      }).then(function (text) {
         if (my !== fileSeq[side] || sw !== switchSeq) return;
         if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
         if (PdfView.clear) PdfView.clear(side);
@@ -944,10 +949,11 @@
     if (lastResult && lastResult.mode === 'grid') rerenderGridKeepScroll();
   });
 
-  // ---------- 跨区域协同滚动（主区域1 标注 / 主区域2 编辑 / 主区域3 PDF） ----------
+  // ---------- 跨区域协同滚动（主区域1 标注 / 主区域2 编辑 / 主区域3 PDF·Word） ----------
   // 内容锚定：6 个滚动区块统一以“文本行号”为坐标系——区域1 行带 data-ls，编辑区行号即文本行号，
-  // PDF 文本项行号与提取文本完全一致。滚动时把驱动区视口顶部换算成锚定行，其余区滚动到同一行；
-  // 左右两侧行号经 diff 对齐表互译。页数/字号/版式差异不影响对照；锚信息缺失时降级比例同步。
+  // PDF 文本项行号与提取文本完全一致，Word 面板的段号即 mammoth 文本行号。滚动时把驱动区视口顶部
+  // 换算成锚定行，其余区滚动到同一行；左右两侧行号经 diff 对齐表互译。
+  // 页数/字号/版式差异不影响对照；锚信息缺失时降级比例同步。
   function currentScrollers() {
     var out = [];
     var lb = $('leftBody'), rb = $('rightBody'), ib = $('inline-body');
@@ -1095,13 +1101,33 @@
       }
     };
   }
+  /** 主区域3 该侧当前实际渲染的查看器：认面板 DOM 里的内容（docx-host → Word，否则 PDF）。
+   *  同侧互斥由加载方保证（loadFileToSide 会 clear 掉另一个），这里再看一眼 DOM 是防时序错位：
+   *  万一 "已加载标记" 与 "面板里真正显示的东西" 不一致，锚点必须跟面板走，否则协同滚动会错位。 */
+  function panelViewer(side) {
+    var p = PdfView.getPanel ? PdfView.getPanel(side) : null;
+    var host = p && p.firstChild;
+    var isDocx = !!(host && (' ' + (host.className || '') + ' ').indexOf(' docx-host ') >= 0);
+    if (isDocx && typeof DocxView !== 'undefined' && DocxView.isLoaded && DocxView.isLoaded(side) && DocxView.lineAtOffset) return DocxView;
+    if (PdfView.isLoaded && PdfView.isLoaded(side) && PdfView.lineAtOffset) return PdfView;
+    return null;
+  }
+
+  /**
+   * 主区域3 面板适配器。PDF 面板与 Word 面板共用同一元素（#pdfLeft/#pdfRight），
+   * 两者都提供同名同语义的 lineAtOffset/lineOffset/lineHeight/nextLineOffset，
+   * 行号坐标系同为"面板原文行号"，故 Word 面板与 PDF 面板一样按行锚定（而非比例同步）。
+   * ★ 每次调用现取查看器（而非绑定时判定一次）：文件加载与协同滚动绑定是两条独立的时序，
+   *   适配器对象在 rebind 之后仍长期存活，绑定时那个决定会过期。
+   */
   function pdfPanelAdapter(side) {
+    function viewer() { return panelViewer(side) || PdfView; }
     return {
-      side: side, space: 'pdf',
-      lineAt: function (px) { return PdfView.lineAtOffset ? PdfView.lineAtOffset(side, px) : null; },
-      offsetOf: function (line) { return PdfView.lineOffset ? PdfView.lineOffset(side, line) : null; },
-      lineH: function (line) { return PdfView.lineHeight ? PdfView.lineHeight(side, line) : null; },
-      nextOffset: function (line) { return PdfView.nextLineOffset ? PdfView.nextLineOffset(side, line) : null; }
+      side: side, space: 'pdf',                  // 与 PDF 同坐标系：行号 = 面板原文（PDF/Word 提取文本）行号
+      lineAt: function (px) { var v = viewer(); return v.lineAtOffset ? v.lineAtOffset(side, px) : null; },
+      offsetOf: function (line) { var v = viewer(); return v.lineOffset ? v.lineOffset(side, line) : null; },
+      lineH: function (line) { var v = viewer(); return v.lineHeight ? v.lineHeight(side, line) : null; },
+      nextOffset: function (line) { var v = viewer(); return v.nextLineOffset ? v.nextLineOffset(side, line) : null; }
     };
   }
 
@@ -1109,9 +1135,10 @@
   // --- 再换回另一侧的行号+行内比例。比纯行级插值更贴近真实内容，修整/重排后仍对齐。
   // 两张对齐表：
   //   editorCharMap —— 来自对比结果 charAnchors（编辑器文本坐标系，随对比结果刷新）；
-  //   pdfCharMap    —— 来自 PDF 原文（PDF 坐标系，修整后 PDF↔PDF 依然用它对得准）。
+  //   pdfCharMap    —— 来自主区域3 的面板原文（PDF 提取文本 / Word 的 mammoth 文本，两者同为
+  //                    "面板坐标系"，修整后 PDF↔PDF、Word↔Word、PDF↔Word 依然用它对得准）。
   var editorCharMap = null;            // { l2r, r2l, texts:{L,R}, lineStarts:{L,R} }
-  var pdfCharMap = null;               // 同上，但基于 PDF 原文
+  var pdfCharMap = null;               // 同上，但基于主区域3 面板原文（PDF/Word）
   var pdfMapSeq = 0;
   var pdfMapMatchesEditors = false;    // pdfCharMap 与编辑器当前文本一致时，混合跨区（PDF↔编辑）才能用字符级坐标
 
@@ -1202,7 +1229,8 @@
       lineStarts: { L: lineStartsOf(tl), R: lineStartsOf(tr) }
     };
   }
-  /** 基于 PDF 原文重建对齐表（行级+字符级）。编辑器文本恰为 PDF 原文时复用对比结果表（零额外 diff），否则另算 */
+  /** 基于主区域3 面板原文（PDF 提取文本 / Word 的 mammoth 文本）重建对齐表（行级+字符级）。
+   *  编辑器文本恰为面板原文时复用对比结果表（零额外 diff），否则另算 */
   function refreshPdfCharMap(tL, tR) {
     var my = ++pdfMapSeq;
     pdfCharMap = null;
@@ -1228,11 +1256,13 @@
       && pdfCharMap.texts.R === editorR.getValue());
   }
 
+  // ★ 这里的 "pdf" 指"主区域3 面板坐标系"（PDF 提取文本 / Word 的 mammoth 文本，行号都是面板原文行号），
+  //   Word 面板与 PDF 面板共用该坐标系，故一律走 pdfCharMap 这条路径。
   function crossTranslate(srcA, oA, e) {
     var from = srcA.side, to = oA.side;
     var srcPdf = srcA.space === 'pdf', tgtPdf = oA.space === 'pdf';
     var r;
-    // PDF↔PDF：恒用 PDF 原文表（修整/手工改编辑器后依然对得准 —— 最高优先级）
+    // 面板↔面板：恒用面板原文表（修整/手工改编辑器后依然对得准 —— 最高优先级）
     if (srcPdf && tgtPdf && pdfCharMap) {
       r = translateWithMap(pdfCharMap, from, to, e);
       if (r != null) return r;
@@ -1242,7 +1272,7 @@
       r = translateWithMap(editorCharMap, from, to, e);
       if (r != null) return r;
     }
-    // 混合（PDF↔编辑）：仅当编辑器文本与 PDF 原文一致时字符级坐标才成立
+    // 混合（主区域3↔编辑）：仅当编辑器文本与面板原文一致时字符级坐标才成立
     if ((srcPdf !== tgtPdf) && pdfCharMap && pdfMapMatchesEditors) {
       r = translateWithMap(pdfCharMap, from, to, e);
       if (r != null) return r;
