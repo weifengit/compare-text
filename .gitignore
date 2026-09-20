@@ -23,3 +23,6 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 icon.png
+
+# 验证钉子 / 无头渲染的临时产物
+.spike-out/
