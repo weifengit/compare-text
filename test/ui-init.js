@@ -105,6 +105,7 @@ vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/pdfview.js'), 'utf8
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/docxview.js'), 'utf8'), sandbox, { filename: 'docxview.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/syncscroll.js'), 'utf8'), sandbox, { filename: 'syncscroll.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/tabs.js'), 'utf8'), sandbox, { filename: 'tabs.js' });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/pipeline.js'), 'utf8'), sandbox, { filename: 'pipeline.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/app.js'), 'utf8'), sandbox, { filename: 'app.js' });
 var Compute = sandbox.Compute;
 
@@ -399,7 +400,7 @@ setTimeout(function () {
       }
       // 文件选择立即响应：选非 PDF 文件 → fetch 微任务写入编辑区，再等一帧汇总
       els['fileSelL'].value = '/tmp/测试文档.txt';
-      els['fileSelL'].dispatch('change');   // FilterBar change → onFileChange('L', path) → loadFileToSide
+      els['fileSelL'].dispatch('change');   // FilterBar change → onFileChange('L', path) → Pipeline.loadSide
       setTimeout(function () {
         try {
           if (editors[0].getValue() !== '非PDF文件文本') {

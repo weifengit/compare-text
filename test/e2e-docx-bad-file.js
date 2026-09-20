@@ -4,7 +4,7 @@
  * JSZip 的 "End of data reached (data length = 0, asked index = 4). Corrupted zip ?" 甩给用户。
  * 该报错只有一种来源：喂进 JSZip 的字节数是 0。真实场景里就是文件本身是 0 字节
  * （网盘/OneDrive 占位文件没下载到本地、文件仍在写入或同步中、下载中断留下的空文件）。
- * 用 headless Edge + CDP 驱动真实页面，走用户同一条加载链路（FilterBar → loadFileToSide → fetch）：
+ * 用 headless Edge + CDP 驱动真实页面，走用户同一条加载链路（FilterBar → Pipeline.loadSide → fetch）：
  *   ① 空文件 → 提示"文件为空（0 字节）"（面板红框与 toast 同一句文案），编辑器内容不被污染；
  *   ② 非 ZIP（.doc 改名/损坏）→ 提示"缺少 ZIP 文件头"，与 ① 区分开；
  *   ③ 截断的真 docx（有 ZIP 头、内容不全）→ 仍交给 JSZip 报错，且不得误判成"文件为空"；

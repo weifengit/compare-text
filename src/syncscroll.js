@@ -46,8 +46,6 @@
   var JUMP_LINES = 10;
   var GESTURE_IDLE = 200;
   var VIRTUAL_TTL = 200;
-  // 像素级差距阈值：目标与理想位置像素差距 ≥ 该值 → 直接完整跟随（防卡死/防跳变）。
-  var PX_GAP_BYPASS = 200;
   // 源行位变化低于该值视为“源基本停止”——不再钳制，允许目标收敛（关键修复）。
   var IDLE_DELTA = 0.3;
 
@@ -129,8 +127,11 @@
     if (eIdeal == null) return null;
     // 大跳（滚动条/翻页/程序化归位）：完整跟随
     if (Math.abs(srcDelta) >= JUMP_LINES) return eIdeal;
-    // 像素差距大：完整跟随
-    if (Math.abs(idealPx - o.scrollTop) >= PX_GAP_BYPASS) return eIdeal;
+    // 注意：这里曾经有一条“|idealPx - o.scrollTop| ≥ 200px 就完整跟随”的旁路，已删除。
+    //   它恰好抵消了层3 的目的——错映射（页眉/稀疏锚点）造成的偏差通常就是 10 行上下
+    //   （20px 行高即 200px），旁路一开，最该被截断的错映射反而全部放行。
+    //   目标需要收敛时不靠“像素差大就放行”，而靠下面的源停止分支（IDLE_DELTA）——
+    //   源停下后才整体到位，手势过程中始终受步长钳制。
     // ★ 关键修复：源基本停止时不做弹性钳制，直接完整跟随。
     //   触发场景：源已到边界（视口不动，srcDelta=0），但目标还没到位——
     //   原逻辑走 else 分支把目标限在 cur±TOL 内，导致目标卡在半路、上不去/下不来，

@@ -79,7 +79,7 @@ var sandbox = {
   Diff: require('../lib/diff.min.js')
 };
 vm.createContext(sandbox);
-['normalize', 'compute', 'source-api', 'picker', 'filterbar', 'pdfview', 'syncscroll', 'tabs', 'app'].forEach(function (f) {
+['normalize', 'compute', 'source-api', 'picker', 'filterbar', 'pdfview', 'docxview', 'syncscroll', 'tabs', 'pipeline', 'app'].forEach(function (f) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/' + f + '.js'), 'utf8'), sandbox, { filename: f + '.js' });
 });
 var Compute = sandbox.Compute;

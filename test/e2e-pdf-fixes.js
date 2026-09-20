@@ -106,7 +106,11 @@ function cleanup() {
   var i;
   for (i = 0; i < 40; i++) { try { await fetchJson('http://127.0.0.1:' + HTTP_PORT + '/api/list?path=' + encodeURIComponent(FIX)); break; } catch (e) { await wait(250); } }
 
-  edgeProc = cp.spawn(EDGE, ['--headless=new', '--disable-gpu', '--no-first-run',
+  // ③ 历史记录布局断言依赖“宽屏且侧边栏展开”的形态：不传 --window-size 时 headless Edge
+  //    默认 800×600，window.innerWidth=800 < 900 会触发 app.js 的 isNarrow() 自动收起侧边栏，
+  //    列表高度变 0、“清空全部”被挤出可视区。窄视口同时把 PDF 缩到 ~0.27，canvas 宽度的
+  //    整数像素取整误差（1/137≈0.7%）会超过 ② 的 0.5% 一致性容差。故与其它 e2e 一样定死窗口尺寸。
+  edgeProc = cp.spawn(EDGE, ['--headless=new', '--disable-gpu', '--no-first-run', '--window-size=1400,1000',
     '--remote-debugging-port=' + DBG_PORT, '--user-data-dir=' + path.join(require('os').tmpdir(), 'edge-fix-profile-' + process.pid),
     'http://127.0.0.1:' + HTTP_PORT + '/'], { stdio: 'ignore' });
 

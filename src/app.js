@@ -41,11 +41,7 @@
     optIgnoreWidth: 'ignoreWidth',
     optIgnorePunct: 'ignorePunct'
   };
-  var expanded = {};            // 折叠行展开状态
-  var lastResult = null;        // 最近一次计算结果
-  var lastOptions = null;       // 最近一次对比所用选项
-  var worker = null;
-  var seq = 0;
+  // 差异计算、结果区渲染与主区域3 标注均在 src/pipeline.js（Pipeline），此处只保留界面状态
   var debounceTimer = null;
   var editorL, editorR;
   var HISTORY_KEY = 'diffchecker_history_v1';
@@ -87,9 +83,10 @@
     }
   }
   function setBusy(b) {
+    var r = Pipeline.getResult();
     if (b) { statusEl.innerHTML = '<span class="spin"></span>正在计算…'; }
-    else if (!lastResult) { statusEl.textContent = '在两侧粘贴文本即可自动对比'; }
-    else if (lastResult.error) { statusEl.textContent = '计算出错：' + lastResult.error; statusEl.classList.add('bad'); }
+    else if (!r) { statusEl.textContent = '在两侧粘贴文本即可自动对比'; }
+    else if (r.error) { statusEl.textContent = '计算出错：' + r.error; statusEl.classList.add('bad'); }
     else { statusEl.textContent = '对比完成'; statusEl.classList.remove('bad'); }
   }
   function toast(msg, isErr) {
@@ -120,340 +117,49 @@
     } catch (e) { /* quota 等异常忽略 */ }
   }
 
-  // ---------- 对比入口 ----------
-  function ensureWorker() {
-    if (worker) { var w = worker; return w; }
-    try {
-      worker = new Worker('src/worker.js');
-    } catch (e) {
-      worker = null;
-      return null;
-    }
-    worker.onmessage = function (ev) {
-      if (ev.data.id !== seq) return; // 丢弃过期结果
-      setBusy(false);
-      if (ev.data.error) { lastResult = { error: ev.data.error }; setBusy(false); reportStats(null); return; }
-      ev.data.result._options = lastOptions;
-      renderResult(ev.data.result);
-    };
-    worker.onerror = function () { worker = null; };
-    return worker;
-  }
-  function runLocal(payload) {
-    try { return Compute.computeDiff(payload); } catch (e) { return { error: String((e && e.stack) || e) }; }
-  }
-  function compare(fromRestore) {
-    lastCompareIsRestore = !!fromRestore;
-    var left = editorL.getValue(), right = editorR.getValue();
-    var o = readOptions();
-    lastOptions = o;
-    lastResult = null;
-    var payload = { left: left, right: right, options: o };
-    var w = ensureWorker();
-    if (w) {
-      setBusy(true);
-      w.postMessage({ id: ++seq, payload: payload });
-    } else {
-      var res = runLocal(payload);
-      res._options = o;
-      renderResult(res);
-    }
-  }
-
-  // ---------- 渲染 ----------
-  function segsHtml(segs) {
-    var h = '';
-    for (var i = 0; i < segs.length; i++) {
-      var s = segs[i];
-      h += '<span class="hl ' + (s.cls === 'rm' ? 'rm' : s.cls === 'ad' ? 'ad' : 'eq') + '">' +
-           escHtml(s.text).replace(/\r/g, '') + '</span>';
-    }
-    return h;
-  }
-
-  function buildRowsWithFold(rows) {
-    var n = rows.length, out = [], i = 0;
-    while (i < n) {
-      if (foldEnabled && rows[i].type === 'equal') {
-        var j = i;
-        while (j < n && rows[j].type === 'equal') j++;
-        if (j - i >= 3) {
-          var key = i + ':' + (j - 1);
-          if (expanded[key]) { for (var k = i; k < j; k++) out.push(rows[k]); }
-          else out.push({ type: 'fold', count: j - i, li: rows[i].li, ri: rows[i].ri, key: key });
-          i = j;
-          continue;
-        }
-      }
-      out.push(rows[i]);
-      i++;
-    }
-    return out;
-  }
-
-  // data-ls/data-le：该行（或折叠条）覆盖的文本行号区间（1 基），供内容锚定协同滚动定位
-  function cellHtml(ln, content, cls, attrs) {
-    return '<div class="row ' + cls + '"' + (attrs || '') + '><span class="ln">' + ln + '</span><span class="content">' + content + '</span></div>';
-  }
-
-  var FOLD_LABEL = '行相同内容（点击展开）';
-
-  function renderGrid(res) {
-    var rowsArr = buildRowsWithFold(res.rows);
-    var L = res.leftLines, R = res.rightLines;
-    var leftBody = '', rightBody = '';
-    for (var i = 0; i < rowsArr.length; i++) {
-      var r = rowsArr[i];
-      if (r.type === 'fold') {
-        var lbl = '▶ ' + r.count + ' ' + FOLD_LABEL;
-        var fb = '<div class="fold-bar">' + lbl + '</div>';
-        leftBody += '<div class="fold-row" data-key="' + r.key + '" data-ls="' + (r.li + 1) + '" data-le="' + (r.li + r.count) + '">' + fb + '</div>';
-        rightBody += '<div class="fold-row" data-key="' + r.key + '" data-ls="' + (r.ri + 1) + '" data-le="' + (r.ri + r.count) + '">' + fb + '</div>';
-        continue;
-      }
-      var lnL = r.li >= 0 ? String(r.li + 1) : '';
-      var lnR = r.ri >= 0 ? String(r.ri + 1) : '';
-      var lsL = ' data-ls="' + (r.li + 1) + '"';
-      var lsR = ' data-ls="' + (r.ri + 1) + '"';
-      if (r.type === 'equal') {
-        leftBody += cellHtml(lnL, escHtml(L[r.li]), 'same', lsL);
-        rightBody += cellHtml(lnR, escHtml(R[r.ri]), 'same', lsR);
-      } else if (r.type === 'change') {
-        leftBody += cellHtml(lnL, segsHtml(r.segL), 'change-l', lsL);
-        rightBody += cellHtml(lnR, segsHtml(r.segR), 'change-r', lsR);
-      } else if (r.type === 'remove') {
-        leftBody += cellHtml(lnL, escHtml(L[r.li]), 'remove', lsL);
-        rightBody += '<div class="row empty"></div>';
-      } else if (r.type === 'add') {
-        leftBody += '<div class="row empty"></div>';
-        rightBody += cellHtml(lnR, escHtml(R[r.ri]), 'add', lsR);
-      }
-    }
-    results.innerHTML =
-      '<div class="grid">' +
-      '<div class="colhead">原文</div>' +
-      '<div class="colhead">修改后</div>' +
-      '<div class="grid-body" id="leftBody">' + leftBody + '</div>' +
-      '<div class="grid-body" id="rightBody">' + rightBody + '</div>' +
-      '</div>';
-    reportStats(res);
-    rebindScrollSync();   // 重渲染重建了 leftBody/rightBody，必须重新绑定协同滚动
-  }
-
-  /** 流水视图：按原文实际行拆行（保留行号），每行一段高亮片段 */
-  function flowLineRows(segs) {
-    var rows = [], cur = [], ln = 1;
-    for (var i = 0; i < segs.length; i++) {
-      var s = segs[i];
-      var parts = String(s.text).split(/(\r\n|\n|\r)/);
-      for (var p = 0; p < parts.length; p++) {
-        var part = parts[p];
-        if (/^(\r\n|\n|\r)$/.test(part)) {
-          rows.push({ n: ln, segs: cur });
-          cur = [];
-          ln++;
-        } else if (part !== '') {
-          cur.push({ text: part, cls: s.cls });
-        }
-      }
-    }
-    if (cur.length) rows.push({ n: ln, segs: cur });
-    return rows;
-  }
-
-  /** 流水行渲染：左侧行号列 + 内容，与并排视图一致 */
-  function flowRowsHtml(rows) {
-    var h = '';
-    for (var i = 0; i < rows.length; i++) {
-      var r = rows[i];
-      var inner = '';
-      for (var j = 0; j < r.segs.length; j++) {
-        var s = r.segs[j];
-        var cls = s.cls === 'rm' ? 'rm' : s.cls === 'ad' ? 'ad' : 'eq';
-        inner += '<span class="hl ' + cls + '">' + escHtml(s.text).replace(/\r/g, '') + '</span>';
-      }
-      h += '<div class="row" data-ls="' + r.n + '"><span class="ln">' + r.n + '</span><span class="content">' + inner + '</span></div>';
-    }
-    return h;
-  }
-
-  function renderFlow(res) {
-    if (res.skipped) {
-      results.innerHTML = '<div class="inline-body" id="inline-body" style="padding:20px;color:#666">'
-        + '文本过大，忽略换行模式暂无法逐字符对比（' + res.leftLen + ' / ' + res.rightLen + ' 字符）。'
-        + '可关闭“忽略换行”后重试。</div>';
-      reportStats(null);
-      return;
-    }
-    results.innerHTML =
-      '<div class="grid">' +
-      '<div class="colhead">原文（标注）</div>' +
-      '<div class="colhead">修改后（标注）</div>' +
-      '<div class="grid-body" id="leftBody">' + flowRowsHtml(flowLineRows(res.segsL)) + '</div>' +
-      '<div class="grid-body" id="rightBody">' + flowRowsHtml(flowLineRows(res.segsR)) + '</div>' +
-      '</div>';
-    reportStats({ mode: 'flow', addedChars: res.addedChars, removedChars: res.removedChars });
-    rebindScrollSync();   // 同上：重建了左右栏后重新绑定协同滚动
-  }
-
-  function renderResult(res) {
-    lastResult = res;
-    refreshEditorCharMap();              // 编辑区字符对齐表随结果重建（渲染前，供后续滚动互译）
-    var isRestore = lastCompareIsRestore;
-    if (!isRestore) saveHistoryEntry();
-    lastCompareIsRestore = false;
-    setBusy(false);
-    renderHistory();                       // 侧边栏历史随每次对比刷新
-    if (!isRestore) updateTabTitle();      // tab 标题随对比对象更新（恢复 tab 时保留其已有标题）
-    if (res.error) { results.innerHTML = ''; reportStats(null); updatePdfAnnotations(null); rebindScrollSync(); return; }
-    if (editorL.getValue() === '' && editorR.getValue() === '') {
-      results.innerHTML = '<div class="placeholder">在两侧粘贴文本，即可自动开始对比</div>';
-      statsEl.innerHTML = '';
-      statusEl.textContent = '在两侧粘贴文本即可自动对比';
-      updatePdfAnnotations(null);
-      rebindScrollSync();
-      return;
-    }
-    if (res.mode === 'flow') renderFlow(res);
-    else renderGrid(res);
-    updatePdfAnnotations(res);
-    rebindScrollSync();
-  }
-
-  /** 由 diff 结果构建 PDF 标注映射：rm/ad 整行涂色；change 行携带行内字符片段（segL/segR，与区域1 高亮同源）做字符级标注 */
-  function buildAnnotMaps(res) {
-    var mapL = {}, mapR = {};
-    function put(rows) {
-      for (var i = 0; i < rows.length; i++) {
-        var r = rows[i];
-        if (r.type === 'change') {
-          if (r.li >= 0) mapL[r.li + 1] = { t: 'ch', segs: r.segL || [] };
-          if (r.ri >= 0) mapR[r.ri + 1] = { t: 'ch', segs: r.segR || [] };
-        } else if (r.type === 'remove') {
-          if (r.li >= 0) mapL[r.li + 1] = 'rm';
-        } else if (r.type === 'add') {
-          if (r.ri >= 0) mapR[r.ri + 1] = 'ad';
-        }
-      }
-    }
-    /** 流水字符片段 → 逐行 { t, segs } 映射（segs 需含 eq 片段以维持行内偏移） */
-    function putFlow(map, segs, t) {
-      if (!segs || !segs.length) return;
-      var line = 1;
-      var cur = [];                                   // 当前行片段（含 eq，保证偏移正确）
-      function flush() {
-        for (var i = 0; i < cur.length; i++) {
-          if (cur[i].cls !== 'eq') { map[line] = { t: t, segs: cur }; break; }
-        }
-        cur = [];
-      }
-      for (var i = 0; i < segs.length; i++) {
-        var cls = segs[i].cls, text = segs[i].text, a = 0;
-        for (var j = 0; j <= text.length; j++) {
-          if (j === text.length || text[j] === '\n') {
-            if (j > a) cur.push({ text: text.slice(a, j), cls: cls });
-            if (j < text.length) { flush(); line++; }
-            a = j + 1;
-          }
-        }
-      }
-      flush();
-    }
-    if (res && !res.error && res.mode === 'grid') {
-      put(res.rows);
-    } else if (res && !res.error && res.mode === 'flow') {
-      // flow 结果已含全部忽略选项语义（含忽略换行）：把整篇字符片段按行切分，
-      // 左侧标 rm 片段、右侧标 ad 片段，与区域1 流水视图完全一致（不再补算行级 diff，
-      // 否则换行/重排差异会被错误地标到 PDF 上）
-      putFlow(mapL, res.segsL, 'rm');
-      putFlow(mapR, res.segsR, 'ad');
-    }
-    return { L: mapL, R: mapR };
-  }
-
-  /** 把 diff 结果标注到主区域3 的 PDF / Word 面板（先按编辑器 diff 标注，再按需用面板原文校正，见下） */
-  function updatePdfAnnotations(res) {
-    var maps = buildAnnotMaps(res);
-    if (PdfView.setHighlight) {
-      PdfView.setHighlight('L', maps.L);
-      PdfView.setHighlight('R', maps.R);
-    }
-    // Word 面板与 PDF 面板共用主区域3（同侧互斥），标注映射同语义、行号坐标系同源（见 DocxView 头注释）
-    if (typeof DocxView !== 'undefined' && DocxView.setHighlight) {
-      DocxView.setHighlight('L', maps.L);
-      DocxView.setHighlight('R', maps.R);
-    }
-    syncPanelTextAnnotations();
-  }
-
-  // 主区域3 面板标注的行号坐标系 = 面板原文行号（PDF 的提取文本 / Word 的 mammoth 文本）。
-  // “修整”（或手工编辑）会改变编辑器文本的行号系，使编辑器 diff 的行号与面板原文错位
-  // （修整成 1 行后全部标到第 1 行 → 标注失效）。因此：凡该侧已加载面板且其原文与编辑器当前文本
-  // 不一致，就用面板原文 + 当前忽略选项另算一份 diff（与区域1 同一数据流：grid 行 / flow 片段）
-  // 覆盖该侧标注；一致时零额外开销。
-  // PDF 与 Word 面板在这一层完全同构（都有 extractPanel / setHighlight，同名同语义），故共用一条流程；
-  // 两者各自的字符对齐表也一并由此刷新（面板原文坐标系，供协同滚动互译）。
-  var panelAnnSeq = 0;
-  function syncPanelTextAnnotations() {
-    var vL = panelViewer('L'), vR = panelViewer('R');
-    if (!vL && !vR) return;
-    var my = ++panelAnnSeq;
-    Promise.all([
-      vL ? vL.extractPanel('L') : Promise.resolve(null),
-      vR ? vR.extractPanel('R') : Promise.resolve(null)
-    ]).then(function (txts) {
-      if (my !== panelAnnSeq) return;                 // 已有更新的标注流程接管
-      var tL = txts[0], tR = txts[1];
-      refreshPdfCharMap(tL, tR);                      // 先重建面板字符对齐表（无论标注是否需校正）
-      var diffL = !!vL && tL != null && tL !== editorL.getValue();
-      var diffR = !!vR && tR != null && tR !== editorR.getValue();
-      if (!diffL && !diffR) return;                   // 编辑器即面板原文：现有标注已正确
-      var r2 = runLocal({                             // 面板原文的 diff（同步；文本量与面板文档相当，可控）
-        left: tL == null ? '' : tL,
-        right: tR == null ? '' : tR,
-        options: readOptions()
-      });
-      if (my !== panelAnnSeq || !r2 || r2.error) return;
-      var maps = buildAnnotMaps(r2);
-      if (diffL) vL.setHighlight('L', maps.L);
-      if (diffR) vR.setHighlight('R', maps.R);
-    }).catch(function () { /* 提取失败：保留编辑器 diff 的标注 */ });
-  }
-
-  function reportStats(res) {
-    if (!res || res.error) { statsEl.textContent = ''; return; }
-    if (res.mode === 'flow') {
-      var n = (res.addedChars || 0) + (res.removedChars || 0);
-      if (n === 0) statsEl.innerHTML = '<span class="ok">内容一致（忽略换行）</span>';
-      else statsEl.innerHTML = '修改内容：<span class="bad">增 ' + res.addedChars + '</span> · <span class="bad">删 ' + res.removedChars + '</span> 字符';
-      return;
-    }
-    var s = res.stats;
-    var total = s.added + s.removed + s.modified;
-    if (total === 0) {
-      statsEl.innerHTML = '<span class="ok">内容一致（当前忽略选项下）</span>';
-    } else {
-      statsEl.innerHTML =
-        '修改 <span class="bad">' + s.modified + '</span> · 新增 '
-        + '<span class="ok">' + s.added + '</span> · 删除 <span class="bad">' + s.removed + '</span> 行';
-    }
-  }
+  // ---------- 对比管线接线（差异计算 / 结果区渲染 / 主区域3 标注都在 Pipeline） ----------
+  Pipeline.init({
+    resultsEl: results,
+    statsEl: statsEl,
+    // 编辑器文本与选项：管线只读写文本，不关心编辑器是谁
+    getText: function (side) { return side === 'L' ? editorL.getValue() : editorR.getValue(); },
+    setText: function (side, text) { if (side === 'L') editorL.setValue(text); else editorR.setValue(text); },
+    getOptions: readOptions,
+    setBusy: setBusy,
+    toast: toast,
+    // 一次对比落定：历史记录与 tab 标题（tab 恢复发起时不写历史）
+    onResult: function (res, isRestore) {
+      if (!isRestore) saveHistoryEntry();
+      renderHistory();
+      if (!isRestore) updateTabTitle();
+    },
+    // 结果区 DOM 重建后：重新绑定协同滚动（左右栏/流水栏都是新元素）
+    onRendered: function () { rebindScrollSync(); },
+    // 文件文本就绪：字段下拉 + 写入该侧编辑区
+    onPanelText: function (side, text) {
+      if (FilterBar.setFields) FilterBar.setFields(PdfView.segmentFields ? PdfView.segmentFields(text) : []);
+      if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
+    },
+    // 主区域3（PDF/Word 面板）显隐随面板加载结果重算
+    onPanelsChanged: updatePdfArea,
+    // 两侧皆空：状态栏回到初始文案
+    onPlaceholder: function () { statusEl.textContent = '在两侧粘贴文本即可自动对比'; }
+  });
 
   // ---------- 事件 -------
   function scheduleCompare() {
     if (restoring) return;                       // tab 恢复期间 setValue 触发的 change 不发对比
-    updatePdfMapMatches();                       // 编辑器文本变化 → PDF 表与编辑区是否仍同文本
+    Pipeline.updateMapMatches();                 // 编辑器文本变化 → PDF 表与编辑区是否仍同文本
     clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(compare, 400);
+    debounceTimer = setTimeout(function () { Pipeline.compare(); }, 400);
   }
 
   results.addEventListener('click', function (e) {
     var f = e.target.closest('.fold-row');
     if (f) {
-      var key = f.getAttribute('data-key');
-      if (expanded[key]) delete expanded[key];
-      else expanded[key] = true;
-      if (lastResult && lastResult.mode === 'grid') rerenderGridKeepScroll();
+      Pipeline.toggleFold(f.getAttribute('data-key'));
+      var r = Pipeline.getResult();
+      if (r && r.mode === 'grid') rerenderGridKeepScroll();
     }
   });
 
@@ -479,7 +185,7 @@
       editorR.setValue(b.right);
       setTidyBtnMode(false);
       toast('已撤销修整');
-      setTimeout(compare, 0);
+      setTimeout(function () { Pipeline.compare(); }, 0);
       return;
     }
     var left = editorL.getValue(), right = editorR.getValue();
@@ -490,7 +196,7 @@
     editorR.setValue(vR);
     setTidyBtnMode(true);
     toast('已整理为一行，可撤销');
-    setTimeout(compare, 0); // setValue 已触发 change，此处兜底确保重算
+    setTimeout(function () { Pipeline.compare(); }, 0); // setValue 已触发 change，此处兜底确保重算
   });
 
   // ---------- 历史记录 UI（内联于侧边栏，无需点击展开） ----------
@@ -525,7 +231,7 @@
       editorL.setValue(it.left || '');
       editorR.setValue(it.right || '');
       applyOptions(it.options || {});
-      compare();
+      Pipeline.compare();
     } else if (t.classList.contains('h-del')) {
       var arr = loadHistory();
       arr.splice(+t.getAttribute('data-i'), 1);
@@ -614,14 +320,14 @@
     var pL = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
     var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
     var tL = editorL.getValue(), tR = editorR.getValue();
-    fileSeq.L++; fileSeq.R++;                 // 作废旧侧在途加载，防止其回填覆盖互换结果
+    Pipeline.invalidateAll();                 // 作废旧侧在途加载，防止其回填覆盖互换结果
     editorL.setValue(tR);
     editorR.setValue(tL);
     if (tidyBefore) { var tb = tidyBefore.left; tidyBefore.left = tidyBefore.right; tidyBefore.right = tb; }
     if (FilterBar.selectFile) { FilterBar.selectFile('L', pR, true); FilterBar.selectFile('R', pL, true); }
     if (PdfView.swap) PdfView.swap();
     if (DocxView.swap) DocxView.swap();
-    pdfCharMap = null; updatePdfMapMatches();   // PDF 互换：作废旧字符表，待重算
+    Pipeline.resetCharMaps();                 // PDF 互换：作废旧字符表，待重算
     updateTabTitle();
     toast('已左右互换');
   }
@@ -645,10 +351,10 @@
     if (PdfView.clear) PdfView.clear();
     if (DocxView.clear) DocxView.clear();
     updatePdfArea();                             // 清除后无 PDF → 隐藏主区域3
-    pdfCharMap = null; updatePdfMapMatches();
+    Pipeline.resetCharMaps();
     if (FilterBar.setFields) FilterBar.setFields([]);
     toast('已清除');
-    compare();
+    Pipeline.compare();
   });
 
   // ---------- 编辑区高度可调 ----------
@@ -813,115 +519,20 @@
     if (savedSrc) { srcPathInput.value = savedSrc; setSrcPathCur(savedSrc); }
   } catch (e) {}
 
-  var fileSeq = { L: 0, R: 0 };   // 每侧文件加载令牌：同侧新加载作废旧加载（两侧可并行互不干扰）
-  /** docx 字节预检：不通过时返回给用户看的文案，通过返回 null。
-   *  0 字节的 .docx 现实中并不少见（网盘/OneDrive 占位文件尚未下载到本地、文件仍在写入或同步中、
-   *  下载中断留下的空文件），但这份字节一路传到 JSZip 里只会抛一句
-   *  "End of data reached (data length = 0, asked index = 4). Corrupted zip ?"——看不出是文件没读到。
-   *  ZIP 文件头固定是 "PK"，据此把"空文件/不完整"和"根本不是 docx（.doc 改名、损坏）"分开说。
-   *  桩环境（单测传 {len:1,byteLength:100} 这类假 buffer）拿不到真实字节 → 只做长度判断。 */
-  function docxBytesError(buf, absPath) {
-    var n = (buf && buf.byteLength) || 0;
-    var name = String(absPath).replace(/^.*[\\/]/, '');
-    if (!n) return '文件为空（0 字节）：' + name + ' —— 请确认文件已完整保存到本地（网盘中的占位文件需先下载），再重新加载';
-    if (!(typeof ArrayBuffer !== 'undefined' && buf instanceof ArrayBuffer)) return null;
-    if (n < 4) return '文件不完整（仅 ' + n + ' 字节）：' + name + '，可能仍在写入或下载未完成';
-    var b = new Uint8Array(buf, 0, 2);
-    if (b[0] !== 0x50 || b[1] !== 0x4B) return '不是有效的 .docx（缺少 ZIP 文件头）：' + name + '，文件可能已损坏或是 .doc 改名而来';
-    return null;
-  }
-  function loadFileToSide(side, absPath) {
-    if (!absPath || !Source.fileUrl) return;
-    var sw = switchSeq;                        // 快照：tab 切换作废在途加载
-    var my = ++fileSeq[side];
-    // fileUrl 返回 Promise（Tauri 模式需先经 Rust 读字节转 Blob URL）
-    Source.fileUrl(absPath).then(function (url) {
-      if (my !== fileSeq[side] || sw !== switchSeq) return;
-      if (/\.pdf$/i.test(absPath)) {
-      if (DocxView.clear) DocxView.clear(side);  // 与 Word 面板互斥：同侧只保留一种渲染
-      // 单次取文档：渲染 + 提词复用同一份，提词成功后立即写编辑器
-      var load = PdfView.load(side, url, my);
-      if (load && load.then) {
-        load.then(function () {
-          if (my !== fileSeq[side] || sw !== switchSeq) return;
-          return PdfView.extractPanel(side);
-        }).then(function (text) {
-          if (my !== fileSeq[side] || sw !== switchSeq || !text) return;
-          if (FilterBar.setFields) FilterBar.setFields(PdfView.segmentFields ? PdfView.segmentFields(text) : []);
-          if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
-        }).catch(function (err) {
-          if (my === fileSeq[side] && sw === switchSeq) toast('加载 PDF 失败：' + ((err && err.message) || err), true);
-        });
-      }
-      } else if (/\.docx$/i.test(absPath)) {
-      if (PdfView.clear) PdfView.clear(side);    // 与 PDF 面板互斥
-      fetch(url).then(function (r) {
-        // 服务端出错时响应体是 JSON（如 404 {"ok":false,"error":"文件不存在"}），
-        // 直接把它当 docx 喂给 JSZip 只会得到 "Corrupted zip"，看不出是没读到文件
-        if (!r.ok) {
-          var m = 'HTTP ' + r.status + (r.status === 404 ? '（文件不存在，可能已被移动或删除）' : '');
-          if (DocxView.showError) DocxView.showError(side, m);
-          throw new Error(m);
-        }
-        return r.arrayBuffer();
-      }).then(function (buf) {
-        if (my !== fileSeq[side] || sw !== switchSeq) return;
-        // 字节预检不通过就没必要渲染/提词：面板红框 + 抛给下面统一 toast，文案一致
-        var bad = docxBytesError(buf, absPath);
-        if (bad) {
-          if (DocxView.showError) DocxView.showError(side, bad);
-          throw new Error(bad);
-        }
-        // 渲染（DocxView.load）与提词（extractText）并行，同一份 ArrayBuffer
-        return Promise.all([DocxView.load(side, buf, my), DocxView.extractText(buf)]);
-      }).then(function (rs) {
-        var text = rs && rs[1];
-        if (my !== fileSeq[side] || sw !== switchSeq) return;
-        // 登记 Word 原文：docx 面板差异标注的行号坐标系就是它（与编辑器初始文本同一份）。
-        // 必须在 setValue 之前登记——编辑器变更随后触发的对比会用新标注覆盖，顺序颠倒会闪回旧标注
-        if (DocxView.setSourceText) DocxView.setSourceText(side, text || '');
-        if (!text) { updatePdfArea(); return; }
-        if (FilterBar.setFields) FilterBar.setFields(PdfView.segmentFields ? PdfView.segmentFields(text) : []);
-        if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
-        updatePdfArea();                         // docx 已渲染 → 重算主区域3 显隐
-      }).catch(function (err) {
-        if (my === fileSeq[side] && sw === switchSeq) toast('加载 Word 文档失败：' + ((err && err.message) || err), true);
-      });
-      } else if (/\.doc$/i.test(absPath)) {
-      // 旧版二进制 .doc 不支持（无法可靠解析），明确提示，不显示乱码
-      if (PdfView.clear) PdfView.clear(side);
-      if (DocxView.clear) DocxView.clear(side);
-      updatePdfArea();
-      toast('暂不支持旧版 .doc 格式，请先用 Word/WPS 另存为 .docx', true);
-      } else {
-      fetch(url).then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status + (r.status === 404 ? '（文件不存在）' : ''));
-        return r.text();                        // 否则错误 JSON 会被当成文件内容灌进编辑器
-      }).then(function (text) {
-        if (my !== fileSeq[side] || sw !== switchSeq) return;
-        if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
-        if (PdfView.clear) PdfView.clear(side);
-        if (DocxView.clear) DocxView.clear(side);
-        updatePdfArea();                         // 非 PDF 文件：该侧无 PDF → 重算主区域3 显隐
-      }).catch(function (err) {
-        if (my === fileSeq[side] && sw === switchSeq) toast('读取文件失败：' + ((err && err.message) || err), true);
-      });
-      }
-    }).catch(function (err) {
-      if (my === fileSeq[side] && sw === switchSeq) toast('读取文件失败：' + ((err && err.message) || err), true);
-    });
-  }
+  // 文件加载（PDF/Word/文本 → 主区域3 面板 + 该侧编辑区）在 Pipeline.loadSide；
+  // 同侧新加载作废旧加载、字节预检、面板互斥等都在那里，此处只负责选文件的事件接线。
+
   /** 用户切换子文件夹（或加载对比源）后：按当前所选原始/修改文件立即渲染主区域 */
   function onDirChange() {
     var pL = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
     var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
-    loadFileToSide('L', pL);
-    loadFileToSide('R', pR);
+    Pipeline.loadSide('L', pL);
+    Pipeline.loadSide('R', pR);
   }
   if (FilterBar.init) {
     FilterBar.init({
       getRoot: getSrcRoot,
-      onFileChange: loadFileToSide,
+      onFileChange: function (side, absPath) { Pipeline.loadSide(side, absPath); },
       onFieldPick: function (text) { editorL.setValue(text); },
       onDirChange: onDirChange
     });
@@ -932,7 +543,6 @@
   if (Picker && Picker.init) Picker.init({ input: srcPathInput, onPick: loadSrcPath });
 
   // ---------- 第一行按钮：隐藏/显示编辑区 + 折叠/展开相同行 ----------
-  var foldEnabled = true;
   var editorsHidden = false;
   function setEditorsHidden(h) {
     editorsHidden = h;
@@ -944,9 +554,10 @@
   }
   toggleEditorsBtn.addEventListener('click', function () { setEditorsHidden(!editorsHidden); });
   foldBtn.addEventListener('click', function () {
-    foldEnabled = !foldEnabled;
-    foldBtn.textContent = foldEnabled ? '折叠相同行' : '展开相同行';
-    if (lastResult && lastResult.mode === 'grid') rerenderGridKeepScroll();
+    Pipeline.setFoldEnabled(!Pipeline.isFoldEnabled());
+    foldBtn.textContent = Pipeline.isFoldEnabled() ? '折叠相同行' : '展开相同行';
+    var r = Pipeline.getResult();
+    if (r && r.mode === 'grid') rerenderGridKeepScroll();
   });
 
   // ---------- 跨区域协同滚动（主区域1 标注 / 主区域2 编辑 / 主区域3 PDF·Word） ----------
@@ -971,15 +582,16 @@
   // --- 左右行号互译：grid 结果中 li/ri 同时存在的行作为对齐锚点，线性插值 + 端点斜率1外推 ---
   var anchorCache = { res: null, l2r: [], r2l: [] };
   function anchorArrays() {
-    if (anchorCache.res === lastResult) return anchorCache;
+    var res = Pipeline.getResult();
+    if (anchorCache.res === res) return anchorCache;
     var l2r = [], r2l = [];
-    if (lastResult && !lastResult.error && lastResult.mode === 'grid' && lastResult.rows) {
-      for (var i = 0; i < lastResult.rows.length; i++) {
-        var r = lastResult.rows[i];
+    if (res && !res.error && res.mode === 'grid' && res.rows) {
+      for (var i = 0; i < res.rows.length; i++) {
+        var r = res.rows[i];
         if (r.li >= 0 && r.ri >= 0) { l2r.push([r.li + 1, r.ri + 1]); r2l.push([r.ri + 1, r.li + 1]); }
       }
     }
-    anchorCache = { res: lastResult, l2r: l2r, r2l: r2l };
+    anchorCache = { res: res, l2r: l2r, r2l: r2l };
     return anchorCache;
   }
   /** 锚表插值（连续行位）：对浮点 line 线性插值、端点斜率1外推，不取整（worklist 144：去双重取整抖动）。
@@ -1101,17 +713,7 @@
       }
     };
   }
-  /** 主区域3 该侧当前实际渲染的查看器：认面板 DOM 里的内容（docx-host → Word，否则 PDF）。
-   *  同侧互斥由加载方保证（loadFileToSide 会 clear 掉另一个），这里再看一眼 DOM 是防时序错位：
-   *  万一 "已加载标记" 与 "面板里真正显示的东西" 不一致，锚点必须跟面板走，否则协同滚动会错位。 */
-  function panelViewer(side) {
-    var p = PdfView.getPanel ? PdfView.getPanel(side) : null;
-    var host = p && p.firstChild;
-    var isDocx = !!(host && (' ' + (host.className || '') + ' ').indexOf(' docx-host ') >= 0);
-    if (isDocx && typeof DocxView !== 'undefined' && DocxView.isLoaded && DocxView.isLoaded(side) && DocxView.lineAtOffset) return DocxView;
-    if (PdfView.isLoaded && PdfView.isLoaded(side) && PdfView.lineAtOffset) return PdfView;
-    return null;
-  }
+  // 该侧“面板里真正显示的是 PDF 还是 Word”由 Pipeline.panelViewer 判定（它同时服务标注与滚动锚定）
 
   /**
    * 主区域3 面板适配器。PDF 面板与 Word 面板共用同一元素（#pdfLeft/#pdfRight），
@@ -1121,7 +723,7 @@
    *   适配器对象在 rebind 之后仍长期存活，绑定时那个决定会过期。
    */
   function pdfPanelAdapter(side) {
-    function viewer() { return panelViewer(side) || PdfView; }
+    function viewer() { return Pipeline.panelViewer(side) || PdfView; }
     return {
       side: side, space: 'pdf',                  // 与 PDF 同坐标系：行号 = 面板原文（PDF/Word 提取文本）行号
       lineAt: function (px) { var v = viewer(); return v.lineAtOffset ? v.lineAtOffset(side, px) : null; },
@@ -1133,21 +735,8 @@
 
   // --- 字符级互译（6 区协同的核心）：把“文本行号”先换算成字符偏移，经对齐锚表互译，
   // --- 再换回另一侧的行号+行内比例。比纯行级插值更贴近真实内容，修整/重排后仍对齐。
-  // 两张对齐表：
-  //   editorCharMap —— 来自对比结果 charAnchors（编辑器文本坐标系，随对比结果刷新）；
-  //   pdfCharMap    —— 来自主区域3 的面板原文（PDF 提取文本 / Word 的 mammoth 文本，两者同为
-  //                    "面板坐标系"，修整后 PDF↔PDF、Word↔Word、PDF↔Word 依然用它对得准）。
-  var editorCharMap = null;            // { l2r, r2l, texts:{L,R}, lineStarts:{L,R} }
-  var pdfCharMap = null;               // 同上，但基于主区域3 面板原文（PDF/Word）
-  var pdfMapSeq = 0;
-  var pdfMapMatchesEditors = false;    // pdfCharMap 与编辑器当前文本一致时，混合跨区（PDF↔编辑）才能用字符级坐标
-
-  /** 文本行号 → 每行起始字符偏移表（1 基行号；文本不含行尾换行的情形也正确） */
-  function lineStartsOf(text) {
-    var starts = [0], i;
-    for (i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
-    return starts;
-  }
+  // 两张对齐表（editor = 编辑器文本坐标系 / pdf = 主区域3 面板原文坐标系）由 Pipeline 构建，
+  // 这里只做互译计算：行级覆盖够用时走行级，稀疏（段落重排）时退到字符级。
   /** 连续行位 e（行号+行内比例，1基）→ 字符偏移（float，允许落在行中任意字符间） */
   function lineToChar(starts, textLen, e) {
     var n = starts.length;
@@ -1217,50 +806,13 @@
     if (map.char) return translateCharMap(map, from, to, e);
     return null;
   }
-  /** 编辑器文本坐标系对齐表（行级+字符级）：随对比结果（lastResult）重建 */
-  function refreshEditorCharMap() {
-    editorCharMap = null;
-    if (!lastResult || lastResult.error || !(lastResult.lineAnchors || lastResult.charAnchors)) return;
-    var tl = editorL.getValue(), tr = editorR.getValue();
-    editorCharMap = {
-      line: lastResult.lineAnchors || null,
-      char: lastResult.charAnchors || null,
-      texts: { L: tl, R: tr },
-      lineStarts: { L: lineStartsOf(tl), R: lineStartsOf(tr) }
-    };
-  }
-  /** 基于主区域3 面板原文（PDF 提取文本 / Word 的 mammoth 文本）重建对齐表（行级+字符级）。
-   *  编辑器文本恰为面板原文时复用对比结果表（零额外 diff），否则另算 */
-  function refreshPdfCharMap(tL, tR) {
-    var my = ++pdfMapSeq;
-    pdfCharMap = null;
-    if (tL == null || tR == null) return;
-    var anchors = null;
-    if (lastResult && lastResult.charAnchors && editorL.getValue() === tL && editorR.getValue() === tR) {
-      anchors = { line: lastResult.lineAnchors || null, char: lastResult.charAnchors || null };
-    } else {
-      var r2 = runLocal({ left: tL, right: tR, options: readOptions() });
-      if (my !== pdfMapSeq || r2.error) return;
-      anchors = { line: r2.lineAnchors || null, char: r2.charAnchors || null };
-    }
-    if (my !== pdfMapSeq) return;
-    pdfCharMap = anchors ? {
-      line: anchors.line || null, char: anchors.char || null,
-      texts: { L: tL, R: tR },
-      lineStarts: { L: lineStartsOf(tL), R: lineStartsOf(tR) }
-    } : null;
-    updatePdfMapMatches();
-  }
-  function updatePdfMapMatches() {
-    pdfMapMatchesEditors = !!(pdfCharMap && pdfCharMap.texts.L === editorL.getValue()
-      && pdfCharMap.texts.R === editorR.getValue());
-  }
-
   // ★ 这里的 "pdf" 指"主区域3 面板坐标系"（PDF 提取文本 / Word 的 mammoth 文本，行号都是面板原文行号），
-  //   Word 面板与 PDF 面板共用该坐标系，故一律走 pdfCharMap 这条路径。
+  //   Word 面板与 PDF 面板共用该坐标系，故一律走面板原文表这条路径。
   function crossTranslate(srcA, oA, e) {
     var from = srcA.side, to = oA.side;
     var srcPdf = srcA.space === 'pdf', tgtPdf = oA.space === 'pdf';
+    var maps = Pipeline.charMaps();
+    var editorCharMap = maps.editor, pdfCharMap = maps.pdf, pdfMapMatchesEditors = maps.pdfMatchesEditors;
     var r;
     // 面板↔面板：恒用面板原文表（修整/手工改编辑器后依然对得准 —— 最高优先级）
     if (srcPdf && tgtPdf && pdfCharMap) {
@@ -1317,7 +869,7 @@
     var e = lb ? findByTop(rectIndex(lb), px) : null;
     var line = e ? e.ls : null;
     var dtop = e ? px - e.top : 0;
-    renderGrid(lastResult);                      // 内部 rebindScrollSync（新元素 + 新适配器）
+    Pipeline.renderGrid(Pipeline.getResult());    // 内部经 onRendered 重新绑定协同滚动（新元素 + 新适配器）
     var nlb = $('leftBody');
     if (nlb && line != null) {
       var ne = findByLine(rectIndex(nlb), line);
@@ -1390,7 +942,7 @@
     return {
       left: editorL.getValue(), right: editorR.getValue(),
       options: readOptions(),
-      foldEnabled: foldEnabled, editorsHidden: editorsHidden, tidy: tidyBefore,
+      foldEnabled: Pipeline.isFoldEnabled(), editorsHidden: editorsHidden, tidy: tidyBefore,
       pdfMode: PdfView.getMode ? PdfView.getMode() : 'auto',
       srcRoot: srcPathInput.value.trim(),
       dir: $('dirSel') ? $('dirSel').value : '',
@@ -1445,16 +997,16 @@
     editorL.setValue(tab.left || '');
     editorR.setValue(tab.right || '');
     applyOptions(tab.options || {});
-    foldEnabled = tab.foldEnabled !== false;
-    foldBtn.textContent = foldEnabled ? '折叠相同行' : '展开相同行';
+    Pipeline.setFoldEnabled(tab.foldEnabled !== false);
+    foldBtn.textContent = Pipeline.isFoldEnabled() ? '折叠相同行' : '展开相同行';
     setEditorsHidden(!!tab.editorsHidden);
     tidyBefore = tab.tidy || null;
     setTidyBtnMode(!!tidyBefore);
-    expanded = {};
+    Pipeline.resetFold();
     if (PdfView.setMode) PdfView.setMode(tab.pdfMode || 'auto');
     if (tab.srcRoot) { srcPathInput.value = tab.srcRoot; setSrcPathCur(tab.srcRoot); }
     if (FilterBar.setFields) FilterBar.setFields([]);
-    compare(true);                                 // 渲染差异区（恢复发起，不写历史）
+    Pipeline.compare(true);                        // 渲染差异区（恢复发起，不写历史）
     restoring = false;
     queueRefitPage();                              // 编辑区显隐恢复后重对齐页面高度
     restorePdfFiles(tab);                          // 异步恢复 PDF / 文件下拉
@@ -1486,11 +1038,12 @@
             }).then(function (rs) {
               var text = (rs && rs[1]) || '';
               if (DocxView.setSourceText) DocxView.setSourceText(sd, text);
-              // 重渲染已作废该侧旧标注。仅当面板原文正是编辑器当前文本时，lastResult 才是它的对比
+              // 重渲染已作废该侧旧标注。仅当面板原文正是编辑器当前文本时，当前结果才是它的对比
               // 结果 → 直接重落；否则交给随后的对比流程重标（免得把别的 tab 的结果画到这份文档上）
               var cur = (sd === 'L' ? editorL.getValue() : editorR.getValue());
-              if (text && text === cur && lastResult && !lastResult.error) {
-                var m = buildAnnotMaps(lastResult);
+              var res = Pipeline.getResult();
+              if (text && text === cur && res && !res.error) {
+                var m = Pipeline.buildAnnotMaps(res);
                 DocxView.setHighlight(sd, sd === 'L' ? m.L : m.R);
               }
               updatePdfArea();
@@ -1503,6 +1056,7 @@
   }
   function restorePdfFiles(tab) {
     var my = ++switchSeq;
+    Pipeline.invalidateAll();        // 切标签页：作废上一个 tab 在途的文件加载，防止其回填覆盖
     if (!tab.srcRoot && !tab.dir && !tab.fileL && !tab.fileR) {  // 空白 tab：清空选择与 PDF
       if (FilterBar.selectFile) { FilterBar.selectFile('L', '', true); FilterBar.selectFile('R', '', true); }
       if (PdfView.clear) PdfView.clear();
