@@ -335,10 +335,14 @@ function addStats(stats, result) {
   // headless Edge + CDP。沙箱环境（如 dsh 执行命令的沙箱）里不带 --no-sandbox 时，
   // CDP 能连上（/json/list、WebSocket 均正常）但页面渲染进程不响应 Runtime.evaluate，
   // 显式 Page.navigate 也可能不提交 → 一律带 --no-sandbox 启动（无头本地渲染的常规做法）。
+  // --force-device-scale-factor=2：无头下 devicePixelRatio=1，PdfView 按 dpr 光栅化画布
+  // 会把 PDF 页渲染成 1x，capture scale=2 只是把 1x 位图放大 → 文字发虚。强制 dpr=2 后
+  // 画布按 2x 真实光栅化，配合 capture scale=2 得到同尺寸但真 2x 细节的清晰快照。
   function launchEdge(extraArgs) {
     var profile = path.join(os.tmpdir(), 'edge-render-' + process.pid + (extraArgs.length ? '-ns' : ''));
     edgeProc = cp.spawn(BROWSER, ['--headless=new', '--disable-gpu', '--no-first-run', '--hide-scrollbars',
-      '--window-size=1600,1400', '--no-sandbox', '--remote-debugging-port=' + DBG_PORT, '--user-data-dir=' + profile]
+      '--window-size=1600,1400', '--no-sandbox', '--force-device-scale-factor=2',
+      '--remote-debugging-port=' + DBG_PORT, '--user-data-dir=' + profile]
       .concat(extraArgs, ['http://127.0.0.1:' + HTTP_PORT + '/']), { stdio: 'ignore' });
     return (async function () {
       for (var k = 0; k < 60; k++) {
@@ -355,9 +359,9 @@ function addStats(stats, result) {
   }
   var pg = await launchEdge([]);
   if (!pg) {
-    log('浏览器首次启动未拿到页面目标，带 --no-sandbox 重试（兼容沙箱环境）');
+    log('浏览器首次启动未拿到页面目标，重试一次（兼容启动抖动）');
     try { if (edgeProc) edgeProc.kill(); } catch (e0) {}
-    pg = await launchEdge(['--no-sandbox']);
+    pg = await launchEdge(['--retry']);
   }
   if (!pg) throw new Error('未拿到浏览器页面目标');
   ws = new WebSocket(pg.webSocketDebuggerUrl);
