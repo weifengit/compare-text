@@ -387,6 +387,17 @@ html, body {
 .docx-host .docx-wrapper { background: transparent; padding: 0; }
 .docx-host .docx-wrapper > section.docx { margin: 0 auto 10px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
 
+/* Word 面板差异标注：配色与主区域1 的 .hl.rm/.hl.ad 同源（红=删除/原文，绿=新增/修改后）。
+   docx-preview 把字体颜色写成行内样式（style="color:…"），行内普通声明优先于样式表普通声明，
+   因此必须用 !important 才能盖住原文字色——这是字体颜色标注能生效的前提，勿删。 */
+.docx-hl-para.docx-hl-rm { background: var(--del-bg); }
+.docx-hl-para.docx-hl-ad { background: var(--add-bg); }
+.docx-hl-para.docx-hl-rm, .docx-hl-para.docx-hl-rm * { color: var(--del-text) !important; }
+.docx-hl-para.docx-hl-ad, .docx-hl-para.docx-hl-ad * { color: var(--add-text) !important; }
+.docx-hl { border-radius: 2px; padding: 0 1px; }
+.docx-hl.docx-hl-rm, .docx-hl.docx-hl-rm * { color: var(--del-text) !important; background: var(--del-strong); }
+.docx-hl.docx-hl-ad, .docx-hl.docx-hl-ad * { color: var(--add-text) !important; background: var(--add-strong); }
+
 /* 全屏：挤压隐藏顶部第三行、主区域1 与 主区域2 */
 .app.pdf-focus .statusbar,
 .app.pdf-focus .filterbar,

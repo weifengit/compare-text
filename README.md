@@ -1,6 +1,6 @@
 # 文件对比 · Text Diff（离线 · 纯前端）
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License: Apache 2.0](<https://img.shields.io/badge/License-Apache%202.0-blue.svg>)](LICENSE)
 
 类似 Diffchecker 的本地文本对比工具：粘贴两段文字（或选择本地文件 / PDF），逐行 + 逐字符高亮差异，
 **纯本地计算**，不上传服务器。同一套代码既可跑在浏览器，也可打包成 macOS / Windows / Linux 桌面应用。
@@ -122,7 +122,7 @@ npm run build:desktop   # = tauri build：自动先 `node serve.js build` 生成
 
 | 支付宝 | 微信 |
 | ------ | ---- |
-| <img src="docs/alipay.png" alt="支付宝收款码" height="200"> | <img src="docs/wechat.png" alt="微信收款码" height="200"> |
+|        |      |
 
 ## 开源协议
 

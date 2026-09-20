@@ -371,14 +371,20 @@
     return { L: mapL, R: mapR };
   }
 
-  /** 把 diff 结果标注到 PDF 面板（先按编辑器 diff 标注，再按需用 PDF 原文校正，见下） */
+  /** 把 diff 结果标注到主区域3 的 PDF / Word 面板（先按编辑器 diff 标注，再按需用面板原文校正，见下） */
   function updatePdfAnnotations(res) {
     var maps = buildAnnotMaps(res);
     if (PdfView.setHighlight) {
       PdfView.setHighlight('L', maps.L);
       PdfView.setHighlight('R', maps.R);
     }
+    // Word 面板与 PDF 面板共用主区域3（同侧互斥），标注映射同语义、行号坐标系同源（见 DocxView 头注释）
+    if (typeof DocxView !== 'undefined' && DocxView.setHighlight) {
+      DocxView.setHighlight('L', maps.L);
+      DocxView.setHighlight('R', maps.R);
+    }
     syncPdfTextAnnotations();
+    syncDocxAnnotations();
   }
 
   // PDF 标注的行号坐标系 = PDF 原文行号。“修整”（或手工编辑）会改变编辑器文本的行号系，
@@ -410,6 +416,36 @@
       var maps = buildAnnotMaps(r2);
       if (diffL) PdfView.setHighlight('L', maps.L);
       if (diffR) PdfView.setHighlight('R', maps.R);
+    }).catch(function () { /* 提取失败：保留编辑器 diff 的标注 */ });
+  }
+
+  // Word 面板同理，只是"面板原文"由 DocxView（mammoth 提取）提供，坐标系即 mammoth 文本行号：
+  // 加载时编辑器文本就等于它，故只有"修整"/手工编辑后才需要重算。DocxView 的标注是同步落 DOM 的，
+  // 因此这里重算后直接 setHighlight 即完成重绘。
+  var docxAnnSeq = 0;
+  function syncDocxAnnotations() {
+    if (typeof DocxView === 'undefined' || !DocxView.isLoaded || !DocxView.setHighlight || !DocxView.extractPanel) return;
+    var hasL = DocxView.isLoaded('L'), hasR = DocxView.isLoaded('R');
+    if (!hasL && !hasR) return;
+    var my = ++docxAnnSeq;
+    Promise.all([
+      hasL ? DocxView.extractPanel('L') : Promise.resolve(null),
+      hasR ? DocxView.extractPanel('R') : Promise.resolve(null)
+    ]).then(function (txts) {
+      if (my !== docxAnnSeq) return;                 // 已有更新的标注流程接管
+      var tL = txts[0], tR = txts[1];
+      var diffL = hasL && tL != null && tL !== editorL.getValue();
+      var diffR = hasR && tR != null && tR !== editorR.getValue();
+      if (!diffL && !diffR) return;                  // 编辑器即 Word 原文：现有标注已正确
+      var r2 = runLocal({
+        left: tL == null ? '' : tL,
+        right: tR == null ? '' : tR,
+        options: readOptions()
+      });
+      if (my !== docxAnnSeq || !r2 || r2.error) return;
+      var maps = buildAnnotMaps(r2);
+      if (diffL) DocxView.setHighlight('L', maps.L);
+      if (diffR) DocxView.setHighlight('R', maps.R);
     }).catch(function () { /* 提取失败：保留编辑器 diff 的标注 */ });
   }
 
@@ -838,7 +874,11 @@
         return Promise.all([DocxView.load(side, buf, my), DocxView.extractText(buf)]);
       }).then(function (rs) {
         var text = rs && rs[1];
-        if (my !== fileSeq[side] || sw !== switchSeq || !text) return;
+        if (my !== fileSeq[side] || sw !== switchSeq) return;
+        // 登记 Word 原文：docx 面板差异标注的行号坐标系就是它（与编辑器初始文本同一份）。
+        // 必须在 setValue 之前登记——编辑器变更随后触发的对比会用新标注覆盖，顺序颠倒会闪回旧标注
+        if (DocxView.setSourceText) DocxView.setSourceText(side, text || '');
+        if (!text) { updatePdfArea(); return; }
         if (FilterBar.setFields) FilterBar.setFields(PdfView.segmentFields ? PdfView.segmentFields(text) : []);
         if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
         updatePdfArea();                         // docx 已渲染 → 重算主区域3 显隐
@@ -1411,8 +1451,20 @@
             Source.fileUrl(pth).then(function (url) {
               return fetch(url).then(function (r) { return r.arrayBuffer(); });
             }).then(function (buf) {
-              return DocxView.load(sd, buf, my);
-            }).then(function () { updatePdfArea(); }).catch(function () {});
+              // load 会作废该侧坐标系与标注（新 DOM 不能被旧标注命中），故重新提词登记
+              return Promise.all([DocxView.load(sd, buf, my), DocxView.extractText(buf)]);
+            }).then(function (rs) {
+              var text = (rs && rs[1]) || '';
+              if (DocxView.setSourceText) DocxView.setSourceText(sd, text);
+              // 重渲染已作废该侧旧标注。仅当面板原文正是编辑器当前文本时，lastResult 才是它的对比
+              // 结果 → 直接重落；否则交给随后的对比流程重标（免得把别的 tab 的结果画到这份文档上）
+              var cur = (sd === 'L' ? editorL.getValue() : editorR.getValue());
+              if (text && text === cur && lastResult && !lastResult.error) {
+                var m = buildAnnotMaps(lastResult);
+                DocxView.setHighlight(sd, sd === 'L' ? m.L : m.R);
+              }
+              updatePdfArea();
+            }).catch(function () {});
           })(side, path);
         }
         else { if (PdfView.clear) PdfView.clear(side); if (DocxView.clear) DocxView.clear(side); updatePdfArea(); }
