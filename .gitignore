@@ -29,3 +29,4 @@ icon.png
 
 # 无头渲染演示夹具与生成的报告（由 tools/make-demo.js 生成）
 demo/
+docs/*初审

@@ -28,6 +28,7 @@
   var panelText = { L: null, R: null };   // 每侧已提取的 PDF 原文缓存（差异标注独立坐标系用，clearPanel 失效）
   var renderGen = { L: 0, R: 0 };         // 每侧渲染代数：renderAll 递增，renderPage 回调据此丢弃过期页面
   var renderTasks = { L: {}, R: {} };     // 每侧每页在途 RenderTask（重绘前取消，避免叠加/残留）
+  var rendered = { L: [], R: [] };        // 每侧每页是否已渲染完成（供无头截图等外部等待，避免截到空白画布）
   var posIndex = { L: null, R: null };    // 每侧 行号→像素 索引（惰性构建，二分查找零 DOM 读；布局变化后失效重建）
   var posVer = { L: 0, R: 0 };            // 位置代数：任何布局/内容变化递增，丢弃陈旧索引
   var zoomFactor = 1;                     // auto 模式手动缩放系数（Ctrl+滚轮调节，setMode 复位）
@@ -44,6 +45,24 @@
       m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
       m1[1] * m2[4] + m1[3] * m2[5] + m1[5]
     ];
+  }
+
+  /**
+   * pdf.js 文档加载参数：CID 字体依赖外部 CMap（如 Foxit/WPS 生成的简体中文 PDF 使用
+   * UniGB-* / GBK-EUC-*，未内嵌时必须提供 cMapUrl+cMapPacked 才能正确渲染字形）；
+   * 标准 14 字体（FoxitSerif* / Times / Helvetica 等未内嵌时）依赖 standardFontDataUrl。
+   * 缺失时 loadFont 抛 "CMap baseUrl 未指定"，页面文字不绘制 → 快照空白。
+   */
+  function pdfDocParams(url) {
+    // cMapUrl/standardFontDataUrl 必须为绝对 URL：pdf.js 在 Worker 线程里取 CMap/标准字体，
+    // 相对路径会按 Worker 脚本位置（/lib/pdf.worker.min.js）解析成 /lib/lib/... → 404。
+    var base = (W && W.location && W.location.origin) || '';
+    return {
+      url: url,
+      cMapUrl: base + '/lib/cmaps/',
+      cMapPacked: true,
+      standardFontDataUrl: base + '/lib/standard_fonts/'
+    };
   }
 
   /** 取消一侧全部在途渲染任务 */
@@ -146,7 +165,8 @@
         transform: (sx !== 1 || sy !== 1) ? [sx, 0, 0, sy, 0, 0] : null
       });
       renderTasks[side][pageNum] = task;
-      task.promise.catch(function () { if (renderTasks[side][pageNum] === task) delete renderTasks[side][pageNum]; });
+      task.promise.then(function () { rendered[side][pageNum - 1] = true; })   // 画完才置位（无头截图等它）
+        .catch(function () { if (renderTasks[side][pageNum] === task) delete renderTasks[side][pageNum]; });
     }
     try { paintPage(side, pageNum, wrap, vp); }      // 差异标注：失败不影响页面渲染
     catch (e) { /* 忽略 */ }
@@ -162,6 +182,7 @@
     cancelRenderTasks(side);                 // 取消上一轮在途渲染，防止残留叠加
     p.innerHTML = '';
     pageVps[side] = [];
+    rendered[side] = [];                   // 新一轮渲染：全部页标记为未完成
     posIndex[side] = null; posVer[side]++;   // 布局将变化：丢弃旧行位索引
     var total = pdf.numPages;
     var gets = [];
@@ -190,7 +211,7 @@
     if (token === undefined) token = ++loadSeq[side];
     else loadSeq[side] = token;
     p.innerHTML = '<div class="pdf-loading">加载 PDF…</div>';
-    return root.pdfjsLib.getDocument(url).promise.then(function (pdf) {
+    return root.pdfjsLib.getDocument(pdfDocParams(url)).promise.then(function (pdf) {
       if (loadSeq[side] !== token) {                 // 已被更新的加载取代 → 丢弃
         try { pdf.destroy && pdf.destroy(); } catch (e) { /* 忽略 */ }
         return undefined;
@@ -284,7 +305,7 @@
   /** 提取 PDF 全部文本（自建文档，提完销毁；供一次性取词使用） */
   function extractText(url) {
     if (!root.pdfjsLib) return Promise.reject(new Error('pdf.js 未加载'));
-    return root.pdfjsLib.getDocument(url).promise.then(function (pdf) {
+    return root.pdfjsLib.getDocument(pdfDocParams(url)).promise.then(function (pdf) {
       return collectText(pdf).then(function (text) {
         try { pdf.destroy && pdf.destroy(); } catch (e) { /* 忽略 */ }
         return text;
@@ -528,6 +549,11 @@
   }
   function getHighlight(side) { return highlights[side] || {}; }
   function isLoaded(side) { return !!docs[side]; }
+  /** 某侧某页（1-based）是否已渲染完成；未加载/未知返回 false（供无头截图轮询，避免截到空白画布） */
+  function isPageRendered(side, pageNum) {
+    var a = rendered[side];
+    return !!(a && a[pageNum - 1]);
+  }
 
   // ---------- 行号 ↔ 滚动像素（内容锚定协同滚动用：PDF 页数/字号/版式差异不影响行号坐标系） ----------
   // 性能关键：惰性构建“每行一个条目”的 {line, top, h} 索引（渲染/收集/缩放/互换后失效重建），
@@ -663,7 +689,7 @@
         hl: Object.keys(highlights[side] || {}).length, loadToken: loadSeq[side] };
     },
     extractText: extractText, extractPanel: extractPanel, getPanelText: getPanelText, segmentFields: segmentFields,
-    setHighlight: setHighlight, getHighlight: getHighlight, isLoaded: isLoaded,
+    setHighlight: setHighlight, getHighlight: getHighlight, isLoaded: isLoaded, isPageRendered: isPageRendered,
     lineOffset: lineOffset, lineAtOffset: lineAtOffset, lineHeight: lineHeightAtLine,
     nextLineOffset: nextLineOffset
   };

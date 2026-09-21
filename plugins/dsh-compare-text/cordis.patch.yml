@@ -1,0 +1,9 @@
+# dsh-compare-text bundle patch: insert the plugin row into the profile tree.
+# The server half (index.js) starts the compare-text static server on
+# 127.0.0.1 and registers /compare-text-meta; the package's dsh.client
+# declaration makes lib/client.js available to the Web GUI module system.
+- insert:
+    - id: dsh-compare-text
+      name: dsh-compare-text
+      config:
+        port: 3180

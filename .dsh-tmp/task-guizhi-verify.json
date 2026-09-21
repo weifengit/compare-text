@@ -1,0 +1,8 @@
+{
+  "title": "0145 桂枝 对比报告（验证）",
+  "output": "E:/code/compare-text/.dsh-tmp/0145-guizhi-verify.html",
+  "options": { "ignoreCase": true, "ignoreEol": true, "ignoreWhitespace": true, "ignoreNewline": true, "ignoreWidth": true, "ignorePunct": true },
+  "pairs": [
+    { "left": "E:/code/compare-text/docs/莫秋怡-初审/0145 桂枝/桂枝-广东确定.pdf", "right": "E:/code/compare-text/docs/莫秋怡-初审/0145 桂枝/桂枝-重庆确定.pdf" }
+  ]
+}

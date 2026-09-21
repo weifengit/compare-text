@@ -26,6 +26,7 @@ var fs = require('fs');
 var os = require('os');
 var path = require('path');
 var cp = require('child_process');
+var zlib = require('zlib');
 var Report = require(path.join(__dirname, '..', 'src', 'report.js'));
 
 var ROOT = path.join(__dirname, '..');
@@ -107,6 +108,46 @@ function capture(clip, scale) {
   }, 60000).then(function (r) { return Buffer.from(r.data, 'base64'); });
 }
 function pngSize(buf) { return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }; }
+
+/** 解码 PNG（RGBA/8bit，常见截图格式），返回 { dark: 暗像素占比(%), w, h }。
+ *  逐行 unfilter（Sub/Up/Average/Paeth 全支持），抽样步长 32px 统计暗像素。 */
+function pngStats(buf) {
+  function paeth(a, b, c) {
+    var p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+    return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+  }
+  var w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+  if (w < 1 || h < 1 || w > 20000 || h > 20000) return { dark: 0, w: w, h: h };
+  var bpp = 4, stride = w * bpp, off = 8, idat = [];
+  while (off + 8 <= buf.length) {
+    var len = buf.readUInt32BE(off), type = buf.toString('ascii', off + 4, off + 8);
+    if (type === 'IDAT') idat.push(buf.slice(off + 8, off + 8 + len));
+    off += 12 + len;
+    if (type === 'IEND') break;
+  }
+  var raw;
+  try { raw = zlib.inflateSync(Buffer.concat(idat)); } catch (e) { return { dark: 0, w: w, h: h }; }
+  var prev = Buffer.alloc(stride), cur = Buffer.alloc(stride), pos = 0;
+  var dark = 0, tot = 0;
+  for (var y = 0; y < h; y++) {
+    if (pos >= raw.length) break;
+    var f = raw[pos++];
+    raw.copy(cur, 0, pos, pos + stride); pos += stride;
+    if (f === 1) for (var i = bpp; i < stride; i++) cur[i] = (cur[i] + cur[i - bpp]) & 255;
+    else if (f === 2) for (var j = 0; j < stride; j++) cur[j] = (cur[j] + prev[j]) & 255;
+    else if (f === 3) for (var k = 0; k < stride; k++) cur[k] = (cur[k] + ((k < bpp ? 0 : cur[k - bpp]) + prev[k]) >> 1) & 255;
+    else if (f === 4) for (var m = 0; m < stride; m++) cur[m] = (cur[m] + paeth(m < bpp ? 0 : cur[m - bpp], prev[m], m < bpp ? 0 : prev[m - bpp])) & 255;
+    if (y % 8 === 0) {
+      for (var x = 0; x < w; x += 32) {
+        var i0 = x * bpp;
+        if ((cur[i0] + cur[i0 + 1] + cur[i0 + 2]) / 3 < 128) dark++;
+        tot++;
+      }
+    }
+    var t = prev; prev = cur; cur = t;
+  }
+  return { dark: tot ? +(100 * dark / tot).toFixed(2) : 0, w: w, h: h };
+}
 function cleanup() {
   clearTimeout(WATCHDOG);
   try { if (ws) ws.close(); } catch (e) {}
@@ -158,19 +199,39 @@ function pageGeom(pid, sel, k) {
 }
 
 /** 逐页快照（scale=2 保证放大清晰）：返回 [{data,w,h}]；任何一页失败即抛错（该对计入 warning） */
-async function snapSide(pid, sel, label) {
+async function snapSide(side, pid, sel, label) {
   var n = await evaluate('document.getElementById(' + JSON.stringify(pid) + ').querySelectorAll(' + JSON.stringify(sel) + ').length');
   var pages = [];
   for (var k = 0; k < n; k++) {
     var sc = await scrollPageToTop(pid, sel, k);
-    await wait(120);
-    var g = await pageGeom(pid, sel, k);
-    // 坑 1：负/零高度 clip 会永久挂起，先校验
-    if (!(g.clipH > 2) || !(g.clipW > 2)) {
-      throw new Error(label + ' 第 ' + (k + 1) + ' 页不在视口内（clipH=' + g.clipH.toFixed(1) +
-        '，scrollTop 目标 ' + sc.target + '，稳定=' + sc.ok + '）');
+    // 坑 6：pdf.js 的 page.render() 是异步的，canvas 尺寸一旦分配 loadedExpr 就返回 true，
+    // 但画布可能还没画完（字体/CMap 解析慢或渲染任务排队）。逐页轮询"该页已渲染完成"标记。
+    if (typeof PdfView !== 'undefined' && PdfView.isPageRendered) {
+      await poll('JSON.stringify({ok:(function(){var r=' +
+        'PdfView.isPageRendered(' + JSON.stringify(side) + ',' + (k + 1) + ');' +
+        'return r;})()})',
+        function (v) { return JSON.parse(v).ok; }, 120, label + ' 第 ' + (k + 1) + ' 页渲染完成');
     }
-    var buf = await capture({ x: g.clipX, y: g.clipY, width: g.clipW, height: g.clipH }, 2);
+    await wait(120);
+    // 坑 7：滚动+截图组合下 CDP capture 可能拿到几何未稳定/合成未更新的坏帧（随机页空白、
+    // 偶发 clip 高度错误）。画布本身经监控验证稳定正常 → 从"结果端"兜底：
+    // 解码刚截的 PNG 校验暗像素与尺寸，异常则重滚重截（最多 3 次），不依赖具体机制。
+    var buf = null;
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      var g = await pageGeom(pid, sel, k);
+      // 坑 1：负/零高度 clip 会永久挂起，先校验
+      if (!(g.clipH > 2) || !(g.clipW > 2)) {
+        throw new Error(label + ' 第 ' + (k + 1) + ' 页不在视口内（clipH=' + g.clipH.toFixed(1) +
+          '，scrollTop 目标 ' + sc.target + '，稳定=' + sc.ok + '）');
+      }
+      buf = await capture({ x: g.clipX, y: g.clipY, width: g.clipW, height: g.clipH }, 2);
+      var px = pngStats(buf);
+      if (px.dark > 0.15 && px.h >= g.clipH * 0.9) break;   // 有内容且高度正常 → 采用
+      log('      ' + label + ' 第 ' + (k + 1) + '/' + n + ' 页截图异常（dark=' + px.dark + '%，h=' + px.h +
+        '，期望 ' + Math.round(g.clipH) + '），第 ' + attempt + ' 次重试');
+      await scrollPageToTop(pid, sel, k);
+      await wait(300);
+    }
     var s = pngSize(buf);
     pages.push({ data: 'data:image/png;base64,' + buf.toString('base64'), w: s.w, h: s.h });
     log('      ' + label + ' 第 ' + (k + 1) + '/' + n + ' 页：scrollTop ' + sc.target +
@@ -269,10 +330,10 @@ async function renderPair(pair, opts, idx) {
     'if(p&&p.querySelector(".docx-host"))return "docx";if(p&&p.querySelectorAll(".pdf-page").length)return "pdf";return "none";}' +
     'return JSON.stringify({L:k("pdfLeft"),R:k("pdfRight")});})()');
   var shots = { L: [], R: [] };
-  if (kinds.L === 'docx') shots.L = await snapSide('pdfLeft', '.docx-wrapper section.docx', 'L(docx)');
-  else if (kinds.L === 'pdf') shots.L = await snapSide('pdfLeft', '.pdf-page', 'L(pdf)');
-  if (kinds.R === 'docx') shots.R = await snapSide('pdfRight', '.docx-wrapper section.docx', 'R(docx)');
-  else if (kinds.R === 'pdf') shots.R = await snapSide('pdfRight', '.pdf-page', 'R(pdf)');
+  if (kinds.L === 'docx') shots.L = await snapSide('L', 'pdfLeft', '.docx-wrapper section.docx', 'L(docx)');
+  else if (kinds.L === 'pdf') shots.L = await snapSide('L', 'pdfLeft', '.pdf-page', 'L(pdf)');
+  if (kinds.R === 'docx') shots.R = await snapSide('R', 'pdfRight', '.docx-wrapper section.docx', 'R(docx)');
+  else if (kinds.R === 'pdf') shots.R = await snapSide('R', 'pdfRight', '.pdf-page', 'R(pdf)');
 
   return { leftName: path.basename(left), rightName: path.basename(right), result: result, shots: shots };
 }
