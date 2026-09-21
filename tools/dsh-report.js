@@ -25,7 +25,8 @@ var path = require('path');
 var cp = require('child_process');
 
 var RENDER = path.join(__dirname, 'render.js');
-var MAX_PER_REPORT = 10;   // 与 render.js 的 C3 约定一致：一份报告最多 10 对
+// 与 render.js 的 C3 约定一致：一份报告默认最多 10 对；可用环境变量 DSH_MAX_PAIRS_PER_REPORT 调高（如单子文件夹超 10 对需合成一份报告时）
+var MAX_PER_REPORT = parseInt(process.env.DSH_MAX_PAIRS_PER_REPORT || '10', 10);
 
 function log(s) { process.stderr.write(s + '\n'); }
 

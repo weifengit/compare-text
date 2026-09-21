@@ -535,9 +535,11 @@ function addStats(stats, result) {
       warnings: ['任务缺少非空 pairs 数组'] }) + '\n');
     process.exit(1);
   }
-  // C3 分卷：一份报告最多 10 对，超出由调用方切成多份（本工具不自行分卷，直接拒绝）
-  if (task.pairs.length > 10) {
-    var mCap = '一份报告最多 10 对（当前 ' + task.pairs.length + ' 对），请将任务拆成多份分别渲染';
+  // C3 分卷：一份报告默认最多 10 对，超出由调用方切成多份（本工具不自行分卷，直接拒绝）；
+  // 可用环境变量 DSH_MAX_PAIRS_PER_REPORT 调高上限（与 dsh-report.js 的 MAX_PER_REPORT 保持一致）
+  var maxPairs = parseInt(process.env.DSH_MAX_PAIRS_PER_REPORT || '10', 10);
+  if (task.pairs.length > maxPairs) {
+    var mCap = '一份报告最多 ' + maxPairs + ' 对（当前 ' + task.pairs.length + ' 对），请将任务拆成多份分别渲染';
     process.stderr.write(mCap + '\n');
     process.stdout.write(JSON.stringify({ ok: false, output: null, stats: { pairs: 0, added: 0, removed: 0, changed: 0 },
       warnings: [mCap] }) + '\n');
