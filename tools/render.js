@@ -108,6 +108,9 @@ function poll(expr, pred, tries, label) {
 // 复现：整行残影 + 贯穿整页的横线，重试无用）；fromSurface=false 直接截出全白图。
 // clip.scale=2 + captureBeyondViewport=true + fromSurface=true 是 spike 以来一直验证干净的路径，
 // 多出的 2x 像素在 Node 内 box 降采样回 2x（见 capturePage），细节无损、体积可控。
+// 注意：个别文档页在某种 clip.scale 下会踩到 Chromium 确定性的光栅化 bug（同一位置、同一形态
+// 的噪点带，重截多少次都一模一样）——与随机撕裂不同，重试无解，必须换一个 clip.scale 再截
+// （光栅化路径改变即避开），capturePage 的坏帧兜底链实现了这一降级。
 function capture(clip, scale) {
   return cdpSend('Page.captureScreenshot', {
     format: 'png',
@@ -244,6 +247,47 @@ function darkRatio(rgba, w, h) {
   }
   return tot ? +(100 * dark / tot).toFixed(2) : 0;
 }
+
+/** 高饱和像素占比（%）：识别"五颜六色花纹"坏帧。文档页近灰阶（差异标注是浅红/浅绿，
+ *  max(r,g,b)-min(r,g,b) 一般 < 60），而 Chromium 偶发返回的撕裂坏帧是满饱和随机噪点
+ *  （差值动辄 200+，占比常超 50%）。阈值取 80，天然避开浅色标注不误判。 */
+function colorfulRatio(rgba, w, h) {
+  var col = 0, tot = 0;
+  for (var y = 0; y < h; y += 8) {
+    for (var x = 0; x < w; x += 32) {
+      var i = (y * w + x) * 4;
+      var mx = Math.max(rgba[i], rgba[i + 1], rgba[i + 2]);
+      var mn = Math.min(rgba[i], rgba[i + 1], rgba[i + 2]);
+      if (mx - mn > 80) col++;
+      tot++;
+    }
+  }
+  return tot ? +(100 * col / tot).toFixed(2) : 0;
+}
+
+/** 噪点行带扫描：把整页纵向等分成 20 条，逐条统计高饱和像素占比，返回最大一条的占比（%）。
+ *  整页均值检测的盲区：撕裂坏帧常以"局部横带"出现（一条 5% 页高的噪点带只占全图 5% 高饱和，
+ *  均值 5% 就漏检）；带扫描抓局部峰值，一条带里噪点超 40% 即判坏帧。真彩色图表页里纯色块
+ *  （红字、绿章）一般横贯整页、不会只挤在某一条窄带里且达到噪点密度，不易误判。 */
+function colorfulBandRatio(rgba, w, h) {
+  var BANDS = 20, worst = 0;
+  for (var b = 0; b < BANDS; b++) {
+    var y0 = Math.floor(h * b / BANDS), y1 = Math.max(y0 + 1, Math.floor(h * (b + 1) / BANDS));
+    var col = 0, tot = 0;
+    for (var y = y0; y < y1; y += 4) {
+      for (var x = 0; x < w; x += 16) {
+        var i = (y * w + x) * 4;
+        var mx = Math.max(rgba[i], rgba[i + 1], rgba[i + 2]);
+        var mn = Math.min(rgba[i], rgba[i + 1], rgba[i + 2]);
+        if (mx - mn > 80) col++;
+        tot++;
+      }
+    }
+    var r = tot ? 100 * col / tot : 0;
+    if (r > worst) worst = r;
+  }
+  return +worst.toFixed(2);
+}
 function cleanup() {
   clearTimeout(WATCHDOG);
   try { if (ws) ws.close(); } catch (e) {}
@@ -332,13 +376,45 @@ async function capturePage(pid, sel, k, scale, label) {
       throw new Error(label + ' 第 ' + (k + 1) + ' 页 ' + Math.round(off) + 'px 处不在视口内（clipH=' +
         g.clipH.toFixed(1) + '，scrollTop 目标 ' + sc.target + '，稳定=' + sc.ok + '）');
     }
-    var buf = await capture({ x: g.clipX, y: g.clipY, width: g.clipW, height: g.clipH }, scale);
-    var img = decodePng(buf);
-    if (!img) throw new Error(label + ' 第 ' + (k + 1) + ' 页切片解码失败（非 8bit RGB/RGBA PNG）');
-    // 截图像素比 = dpr × clip.scale（dpr=2 强制 + scale=2 → 4x）。目标成图固定 2x（与文档约定的
-    // 1224×1584/页一致）：高于 2x 的部分 box 降采样回来，细节不变（画布本来就是 2x 光栅化）、
-    // 体积只有 4x 直存的 1/4 左右。
-    img = downscale(img, Math.max(1, Math.round(img.w / g.clipW / 2)));
+    // 切片级坏帧兜底：captureScreenshot 偶发返回撕裂坏帧（彩色噪点，常以局部横带出现），
+    // 拼进整页就是"五颜六色花纹"。坏帧分两类，处置链逐级升级：
+    //   随机撕裂：等一帧重截即恢复 → 前 2 次同 scale 重截
+    //   确定性光栅化 bug：某一 clip.scale 下同一位置必现同一噪点带（重截无用）→ 换 scale 再截
+    // 真彩色图表页各档都超限则原样采用并记日志，不会死循环。
+    var img = null, sliceCol = 0, sliceBand = 0;
+    // 档位：[重截次数, clip.scale 倍率]——1x=原 scale，1.5x/0.75x 改变光栅化路径避开确定性坏帧
+    var ladder = [[2, 1], [2, 1.5], [2, 0.75]];
+    var badFrame = false;
+    outer:
+    for (var rung = 0; rung < ladder.length; rung++) {
+      var tries = ladder[rung][0], sc2 = scale * ladder[rung][1];
+      for (var sAttempt = 1; sAttempt <= tries; sAttempt++) {
+        var buf = await capture({ x: g.clipX, y: g.clipY, width: g.clipW, height: g.clipH }, sc2);
+        img = decodePng(buf);
+        if (!img) throw new Error(label + ' 第 ' + (k + 1) + ' 页切片解码失败（非 8bit RGB/RGBA PNG）');
+        // 截图像素比 = dpr × clip.scale（dpr=2 强制 + scale=2 → 4x）。目标成图固定 2x（与文档约定的
+        // 1224×1584/页一致）：高于 2x 的部分 box 降采样回来，细节不变（画布本来就是 2x 光栅化）、
+        // 体积只有 4x 直存的 1/4 左右。
+        img = downscale(img, Math.max(1, Math.round(img.w / g.clipW / 2)));
+        sliceCol = colorfulRatio(img.rgba, img.w, img.h);
+        sliceBand = colorfulBandRatio(img.rgba, img.w, img.h);
+        if (sliceCol <= 3 && sliceBand <= 40) {
+          if (rung > 0) log('      ' + label + ' 第 ' + (k + 1) + ' 页切片换 clip.scale=' +
+            ladder[rung][1] + 'x 后恢复干净（均值 ' + sliceCol + '%，带峰 ' + sliceBand + '%）');
+          break outer;
+        }
+        badFrame = true;
+        log('      ' + label + ' 第 ' + (k + 1) + ' 页切片疑似坏帧（高饱和均值 ' + sliceCol +
+          '%，行带峰值 ' + sliceBand + '%，scale 档 ' + ladder[rung][1] + 'x），第 ' +
+          (rung * 2 + sAttempt) + ' 次重截');
+        await wait(300);
+        await scrollPanelTo(pid, g0.base + off);   // 重新稳定滚动位，给合成器一帧新内容
+      }
+    }
+    if (badFrame && (sliceCol > 3 || sliceBand > 40)) {
+      log('      !! ' + label + ' 第 ' + (k + 1) + ' 页切片换档重截后仍疑似坏帧（均值 ' + sliceCol +
+        '%，带峰 ' + sliceBand + '%），按原样采用');
+    }
     if (!canvas) {
       // 像素比由实拍图反推（dpr × clip.scale ÷ 降采样倍率），不假设 devicePixelRatio 的具体值
       ratio = img.w / g.clipW;
@@ -356,13 +432,51 @@ async function capturePage(pid, sel, k, scale, label) {
     slices++;
     off = g.offEnd;   // 推进到"本片已覆盖到的页内位置"，被 clamp 时也不会原地打转
   }
-  return { rgba: canvas, w: W, h: H, filled: filled, slices: slices, dark: darkRatio(canvas, W, H) };
+  return { rgba: canvas, w: W, h: H, filled: filled, slices: slices,
+    dark: darkRatio(canvas, W, H), colorful: colorfulRatio(canvas, W, H),
+    band: colorfulBandRatio(canvas, W, H) };
 }
 
-/** 逐页快照：返回 [{data,w,h}]；任何一页失败即抛错（该对计入 warning） */
-async function snapSide(side, pid, sel, label) {
+/**
+ * 逐页快照：返回 [{data,w,h}]；任何一页失败即抛错（该对计入 warning）。
+ * PDF 优先走"直接光栅化"通道：页面内离屏 canvas 由 pdf.js 重绘后 toDataURL 读像素，
+ * 完全绕开 Chromium 合成器截图（确定性噪点带 bug 的根源）；通道不可用再回退截图链。
+ */
+async function snapSide(side, pid, sel, label, directPdf) {
   var n = await evaluate('document.getElementById(' + JSON.stringify(pid) + ').querySelectorAll(' + JSON.stringify(sel) + ').length');
   var pages = [];
+
+  // ── 通道一（仅 PDF）：直接光栅化。与 DOM/滚动/合成器无关，所见即 PDF 真实内容 ──
+  if (directPdf) {
+    var okAll = true;
+    for (var k0 = 0; k0 < n; k0++) {
+      // 等 DOM 侧该页渲染完成（文档已加载、页对象可用；不依赖其画布，只需页数/几何稳定）
+      await poll('JSON.stringify({ok:(function(){var r=' +
+        'PdfView.isPageRendered(' + JSON.stringify(side) + ',' + (k0 + 1) + ');' +
+        'return r;})()})',
+        function (v) { return JSON.parse(v).ok; }, 120, label + ' 第 ' + (k0 + 1) + ' 页渲染完成');
+      var r = await evaluate('PdfView.rasterizePage(' + JSON.stringify(side) + ',' + (k0 + 1) + ',1,false)');
+      if (!r || !r.data) { okAll = false; log('      !! ' + label + ' 第 ' + (k0 + 1) + ' 页直接光栅化失败，回退截图'); break; }
+      // 像素完整性校验：PDF 页不会是纯白（dark≈0 说明渲染失败，不能收）
+      var raw = Buffer.from(r.data.split(',')[1], 'base64');
+      var probe = decodePng(raw);
+      var dk = probe ? darkRatio(probe.rgba, probe.w, probe.h) : 0;
+      var col = probe ? colorfulRatio(probe.rgba, probe.w, probe.h) : 100;
+      if (!probe || !(dk > 0.05) || col > 20) {
+        okAll = false;
+        log('      !! ' + label + ' 第 ' + (k0 + 1) + ' 页直接光栅化结果异常（dark=' + dk +
+          '%，高饱和=' + col + '%），回退截图');
+        break;
+      }
+      pages.push({ data: r.data, w: r.w, h: r.h });
+      log('      ' + label + ' 第 ' + (k0 + 1) + '/' + n + ' 页：直接光栅化 ' + r.w + '×' + r.h +
+        '（dark=' + dk + '%），' + (raw.length / 1024).toFixed(0) + 'KB');
+    }
+    if (okAll) return pages;
+    pages = [];   // 回退整侧重截，不混用两条通道的几何
+  }
+
+  // ── 通道二：面板滚动 + 合成器截图（含换档降级链） ──
   var wide = await evalJson('JSON.stringify((function(){var p=document.getElementById(' + JSON.stringify(pid) + ');' +
     'var el=p.querySelectorAll(' + JSON.stringify(sel) + ')[0];if(!el)return {pageW:0,visW:0};' +
     'var cs=getComputedStyle(p),pr=p.getBoundingClientRect();' +
@@ -384,15 +498,16 @@ async function snapSide(side, pid, sel, label) {
     }
     await wait(120);
     // 坑 7：滚动+截图组合下 CDP capture 可能拿到几何未稳定/合成未更新的坏帧（随机空白、
-    // 偶发 clip 高度错误）。从"结果端"兜底：校验拼图是否覆盖整页、是否有内容，异常重来
-    // （最多 3 次），不依赖具体机制。
+    // 偶发 clip 高度错误、局部噪点横带）。从"结果端"兜底：校验拼图是否覆盖整页、是否有内容、
+    // 是否有坏帧残带（整页均值与行带峰值双重判定），异常重来（最多 3 次），不依赖具体机制。
     var shot = null;
     for (var attempt = 1; attempt <= 3; attempt++) {
       shot = await capturePage(pid, sel, k, 2, label);
       var covered = shot.filled >= shot.h * 0.98;
-      if (shot.dark > 0.15 && covered) break;
+      if (shot.dark > 0.15 && covered && shot.colorful <= 3 && shot.band <= 40) break;
       log('      ' + label + ' 第 ' + (k + 1) + '/' + n + ' 页截图异常（dark=' + shot.dark + '%，' +
-        '覆盖 ' + shot.filled + '/' + shot.h + 'px），第 ' + attempt + ' 次重试');
+        '高饱和均值=' + shot.colorful + '%，行带峰值=' + shot.band + '%，覆盖 ' + shot.filled + '/' +
+        shot.h + 'px），第 ' + attempt + ' 次重试');
       await wait(300);
     }
     var buf = encodePng(shot.w, shot.h, shot.rgba);
@@ -489,15 +604,15 @@ async function renderPair(pair, opts, idx) {
     'return JSON.stringify({mode:"flow",segsL:r.segsL,segsR:r.segsR,addedChars:r.addedChars,removedChars:r.removedChars});}' +
     'return "null";})()');
 
-  // 逐侧快照（面板里真正渲染的是什么就按什么截）
+  // 逐侧快照（面板里真正渲染的是什么就按什么截；PDF 优先直接光栅化，绕开合成器截图）
   var kinds = await evalJson('(function(){function k(id){var p=document.getElementById(id);' +
     'if(p&&p.querySelector(".docx-host"))return "docx";if(p&&p.querySelectorAll(".pdf-page").length)return "pdf";return "none";}' +
     'return JSON.stringify({L:k("pdfLeft"),R:k("pdfRight")});})()');
   var shots = { L: [], R: [] };
-  if (kinds.L === 'docx') shots.L = await snapSide('L', 'pdfLeft', '.docx-wrapper section.docx', 'L(docx)');
-  else if (kinds.L === 'pdf') shots.L = await snapSide('L', 'pdfLeft', '.pdf-page', 'L(pdf)');
-  if (kinds.R === 'docx') shots.R = await snapSide('R', 'pdfRight', '.docx-wrapper section.docx', 'R(docx)');
-  else if (kinds.R === 'pdf') shots.R = await snapSide('R', 'pdfRight', '.pdf-page', 'R(pdf)');
+  if (kinds.L === 'docx') shots.L = await snapSide('L', 'pdfLeft', '.docx-wrapper section.docx', 'L(docx)', false);
+  else if (kinds.L === 'pdf') shots.L = await snapSide('L', 'pdfLeft', '.pdf-page', 'L(pdf)', true);
+  if (kinds.R === 'docx') shots.R = await snapSide('R', 'pdfRight', '.docx-wrapper section.docx', 'R(docx)', false);
+  else if (kinds.R === 'pdf') shots.R = await snapSide('R', 'pdfRight', '.pdf-page', 'R(pdf)', true);
 
   return { leftName: path.basename(left), rightName: path.basename(right), result: result, shots: shots };
 }

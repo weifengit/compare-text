@@ -391,14 +391,15 @@
   }
 
   /**
-   * 在页面上画一层标注。hl 值两种形态：
+   * 计算某页的标注矩形（viewport/CSS 像素空间，供 DOM 层与离屏光栅化共用）。
+   * 返回 [{cls, x, y, w, h}]，cls ∈ 'rm'|'ad'|'ch'。hl 值两种形态：
    *   'rm'|'ad'           → 整行（该文本项）涂色；
    *   { t:'ch', segs }    → 只涂 segs 中非 eq 的字符区间（与区域1 行内高亮同源）。
    * 垂直方向：框顶=基线-字身高度，框高=字身×1.35，覆盖上伸/下伸笔画。
    */
-  function paintInto(wrap, boxes, vp, hl) {
-    var layer = wrap._hlLayer;
-    if (!layer || !vp || !boxes) return;
+  function computeHlBoxes(boxes, vp, hl) {
+    var rects = [];
+    if (!vp || !boxes) return rects;
     for (var i = 0; i < boxes.length; i++) {
       var b = boxes[i];
       var t = hl[b.line];
@@ -410,7 +411,7 @@
       var x0 = tm[4];
       var itemW = (b.width || 0) * vp.scale;
       if (typeof t === 'string') {
-        addHlBox(layer, t, x0, top, itemW, h);
+        rects.push({ cls: t, x: x0, y: top, w: itemW, h: h });
         continue;
       }
       var ranges = segRanges(t.segs || []);
@@ -423,8 +424,21 @@
         if (e <= s) continue;
         var xs = x0 + prefixWidth(b.str, s, fontH, itemW) * ratio;
         var xe = x0 + prefixWidth(b.str, e, fontH, itemW) * ratio;
-        addHlBox(layer, t.t || 'ch', xs, top, xe - xs, h);
+        rects.push({ cls: t.t || 'ch', x: xs, y: top, w: xe - xs, h: h });
       }
+    }
+    return rects;
+  }
+
+  /**
+   * 在页面上画一层标注。几何全部来自 computeHlBoxes（与离屏光栅化共用同一套计算）。
+   */
+  function paintInto(wrap, boxes, vp, hl) {
+    var layer = wrap._hlLayer;
+    if (!layer || !vp || !boxes) return;
+    var rects = computeHlBoxes(boxes, vp, hl);
+    for (var i = 0; i < rects.length; i++) {
+      addHlBox(layer, rects[i].cls, rects[i].x, rects[i].y, rects[i].w, rects[i].h);
     }
   }
 
@@ -553,6 +567,66 @@
   function isPageRendered(side, pageNum) {
     var a = rendered[side];
     return !!(a && a[pageNum - 1]);
+  }
+
+  /** 与 styles.css 的 .pdf-hl.rm/.ad/.ch 同色（透明度 0.4），供离屏光栅化直接画进像素 */
+  var HL_COLORS = { rm: 'rgba(226,70,70,0.40)', ad: 'rgba(80,170,80,0.40)', ch: 'rgba(235,180,50,0.40)' };
+
+  /**
+   * 报告专用：把某页重新光栅化为 PNG dataURL。
+   * 无头截图走 Chromium 合成器，个别文档页在特定 clip.scale 下踩确定性光栅化 bug
+   * （同一位置必现彩色噪点带，重截无解）；本函数绕开合成器——页面内离屏 canvas 直接
+   * pdf.js render 后 toDataURL 读像素，所见即 PDF 真实内容，与 DOM/滚动/合成完全无关。
+   * 与纯 PDF 不同：此处同时把该页的差异标注（computeHlBoxes 同几何、同色）画进像素，
+   * 报告快照 = 标注过的文档页（与界面面板的视觉效果一致）。
+   * 失败返回 null（调用方回退截图路径）。dimsOnly=true 时只算尺寸不渲染（供预读几何）。
+   */
+  function rasterizePage(side, pageNum, targetScale, dimsOnly) {
+    var pdf = docs[side];
+    if (!pdf) return Promise.resolve(null);
+    return pdf.getPage(pageNum).then(function (page) {
+      if (!page) return null;
+      var vp1 = page.getViewport({ scale: 1 });
+      // 分辨率对齐 UI 光栅化逻辑：面板 canvas = round(vp×dpr)，缩放系数 sx 精确铺满吸收取整误差
+      var cssW = vp1.width * targetScale, cssH = vp1.height * targetScale;
+      var dpr = (W && W.devicePixelRatio) || 1;
+      var pxW = Math.max(1, Math.round(cssW * dpr));
+      var pxH = Math.max(1, Math.round(cssH * dpr));
+      if (dimsOnly) return { w: pxW, h: pxH };
+      var vp = page.getViewport({ scale: targetScale });
+      var canvas = document.createElement('canvas');
+      canvas.width = pxW;
+      canvas.height = pxH;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      // 白底：PDF 页默认透明，拼进报告/直接查看都应按纸面呈现
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, pxW, pxH);
+      var sx = pxW / vp.width, sy = pxH / vp.height;
+      return page.render({
+        canvasContext: ctx,
+        viewport: vp,
+        transform: (sx !== 1 || sy !== 1) ? [sx, 0, 0, sy, 0, 0] : null,
+        background: '#ffffff'
+      }).promise.then(function () {
+        // 差异标注：与 DOM .pdf-hl 同几何（computeHlBoxes）同色（HL_COLORS），直接画进像素
+        try {
+          var pages = textItems[side] || [];
+          for (var pi = 0; pi < pages.length; pi++) {
+            if (pages[pi].page !== pageNum) continue;
+            var rects = computeHlBoxes(pages[pi].boxes, vp, highlights[side] || {});
+            for (var ri = 0; ri < rects.length; ri++) {
+              var rr = rects[ri];
+              ctx.fillStyle = HL_COLORS[rr.cls] || HL_COLORS.ch;
+              ctx.fillRect(rr.x * sx, rr.y * sy, Math.max(1, rr.w * sx), Math.max(1, rr.h * sy));
+            }
+            break;
+          }
+        } catch (e) { /* 标注失败不影响页面像素 */ }
+        try { return { data: canvas.toDataURL('image/png'), w: pxW, h: pxH }; }
+        catch (e) { return null; }
+      }, function () { return null; });
+    }, function () { return null; });
   }
 
   // ---------- 行号 ↔ 滚动像素（内容锚定协同滚动用：PDF 页数/字号/版式差异不影响行号坐标系） ----------
@@ -690,6 +764,7 @@
     },
     extractText: extractText, extractPanel: extractPanel, getPanelText: getPanelText, segmentFields: segmentFields,
     setHighlight: setHighlight, getHighlight: getHighlight, isLoaded: isLoaded, isPageRendered: isPageRendered,
+    rasterizePage: rasterizePage,
     lineOffset: lineOffset, lineAtOffset: lineAtOffset, lineHeight: lineHeightAtLine,
     nextLineOffset: nextLineOffset
   };
