@@ -7,3 +7,10 @@
       name: dsh-compare-text
       config:
         port: 3180
+        # 入口样式（改完重启 dsh web 生效）：
+        #   input-right  聊天输入框工具行右侧小图标（默认，最融入原生界面）
+        #   input-left   聊天输入框工具行左侧小图标
+        #   fab          右下角圆形悬浮按钮
+        #   dock         输入框上方全宽 dock 条
+        #   footer       左侧边栏底部、设置按钮旁的小图标
+        entry: footer

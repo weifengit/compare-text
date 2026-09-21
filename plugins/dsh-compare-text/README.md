@@ -8,21 +8,48 @@
 
 ## 效果
 
-DSH Web GUI 的会话顶部会出现一个 **文本对比** 按钮，点击后在界面内弹出全屏
+DSH Web GUI 里出现一个 **「文本对比」** 入口，点击后在界面内弹出全屏
 浮层（iframe 加载对比工具），可关闭。关闭 DSH 时，插件自动停止它拉起的
 静态服务器。
+
+### 入口样式（可配置）
+
+默认入口在**聊天输入框工具行**（发送键旁的小图标 `⇄`，最融入原生界面）。
+也可在 `cordis.patch.yml` 的 `config.entry` 切换，改完重启 DSH 生效：
+
+| entry | 位置 | 插槽 |
+| ----- | ---- | ---- |
+| `input-right`（默认） | 聊天输入框工具行右侧（发送键旁） | `conversation.input.right` |
+| `input-left` | 聊天输入框工具行左侧 | `conversation.input.left` |
+| `fab` | 右下角圆形悬浮按钮 | `shell.overlay` |
+| `dock` | 输入框上方全宽 dock 条 | `conversation.input.dock` |
+| `footer` | 左侧边栏底部（设置按钮旁） | `sidebar.footer.action` |
+
+```yaml
+# cordis.patch.yml
+- insert:
+    - id: dsh-compare-text
+      name: dsh-compare-text
+      config:
+        port: 3180
+        entry: fab   # ← 换入口样式
+```
 
 ## 目录结构
 
 ```
 plugins/dsh-compare-text/
 ├── package.json      # dsh.bundle（配置层）+ dsh.client（Web UI bundle）声明
-├── cordis.patch.yml  # 把插件行插入 profile 配置树
+├── cordis.patch.yml  # 把插件行插入 profile 配置树（含 entry 入口样式配置）
 ├── index.js          # 服务端半侧：拉起 serve.js + 注册 /compare-text-meta
-└── lib/client.js     # 客户端半侧：会话头部按钮 + 全屏浮层 iframe
+└── lib/client.js     # 客户端半侧：可配置入口（input-left/right/fab/dock/footer）
 ```
 
 ## 安装（一次）
+
+> **换电脑 / 离线安装（不发布 npm / GitHub）请看 [`docs/dsh-offline-install.md`](../../docs/dsh-offline-install.md)**，
+> 或直接用仓库脚本：`bash scripts/install-dsh-plugin.sh`（macOS/Linux）、
+> `.\scripts\install-dsh-plugin.ps1`（Windows）。
 
 在项目根目录（或任意目录）执行：
 
@@ -36,6 +63,8 @@ dsh plugin --profile web add E:\code\compare-text\plugins\dsh-compare-text
    `dsh.profile.bundles` 配置层列表。
 
 > 安装的是本地路径（pnpm link），以后改了插件代码无需重装。
+> 相对路径也可：`cd E:\code\compare-text` 后执行
+> `dsh plugin --profile web add .\plugins\dsh-compare-text`。
 
 ## 验证
 
@@ -49,13 +78,16 @@ dsh --profile web --dump-config | findstr /i "compare-text"
 
 1. **重启** DSH：`dsh web`（或你平时启动 GUI 的方式）。插件在启动时自动拉起
    `node serve.js 3180`（仅 127.0.0.1）。
-2. 打开 `http://127.0.0.1:3080`，进入任意会话，点击会话头部 **文本对比** 按钮。
+2. 打开 `http://127.0.0.1:3080`，进入任意会话，点击 **文本对比** 入口
+   （位置取决于 `config.entry`，默认在输入框工具行发送键旁）。
 3. 浮层内即是对比工具；`Esc` 或右上角 **关闭 ✕** 退出。
 
 ## 配置
 
 - 端口：在 `cordis.patch.yml` 的 `config.port` 修改（默认 3180）。若该端口
   已被占用，插件会复用现有实例而不重复启动。
+- 入口样式：在 `cordis.patch.yml` 的 `config.entry` 修改（默认 `input-right`），
+  可选 `input-right` / `input-left` / `fab` / `dock` / `footer`。
 - 项目根目录：默认按插件包位置推导（`plugins/dsh-compare-text` 的上两级）；
   也可设置环境变量 `COMPARE_TEXT_ROOT` 指向项目根目录。
 

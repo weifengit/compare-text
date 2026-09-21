@@ -80,6 +80,32 @@ npm run test:pdf     # 单独跑 PDF 多页切换
 测试均在 Node 内跑（DOM 桩 / 直接调用导出），无需浏览器或服务器。
 个别浏览器端到端用例（`test/e2e-*.js`）需要本机 Edge，未纳入以上默认命令。
 
+## 集成到 DeepSeek Harness（DSH）
+
+本仓库可以作为 DSH 的 **Skill + Plugin** 使用：
+
+- **Skill `compare-report`**（`.dsh/skills/compare-report/`）：让 DSH 里的 AI
+  能把自然语言对比需求转成任务 JSON，调用 `tools/dsh-report.js` 无头产出
+  自包含 HTML 对比报告（差异颜色标注 + 原始文件逐页快照，双击即看）。
+- **Plugin `dsh-compare-text`**（`plugins/dsh-compare-text/`）：在 DSH Web GUI
+  加 **「文本对比」** 入口（默认在聊天输入框工具行发送键旁的小图标，可在
+  `cordis.patch.yml` 的 `config.entry` 切换为悬浮球 / dock 条 / 侧栏按钮），
+  点击后界面内弹出全屏浮层（iframe 加载对比工具），并自动拉起仅本机访问的
+  静态服务器。
+
+**换电脑 / 离线安装（不发布 npm / GitHub）**，一条命令：
+
+```bash
+# macOS / Linux
+bash scripts/install-dsh-plugin.sh
+
+# Windows PowerShell
+.\scripts\install-dsh-plugin.ps1
+```
+
+详见 [docs/dsh-offline-install.md](docs/dsh-offline-install.md)
+（含手动步骤、验证、卸载、完全离线场景与常见问题）。
+
 ## 打包桌面应用（GitHub Actions 自动打包）
 
 推送 `v*` 标签（如 `v1.0.0`），或在 GitHub 仓库 Actions 页面手动触发 **“打包发布”**，
