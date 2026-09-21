@@ -122,7 +122,7 @@ npm run build:desktop   # = tauri build：自动先 `node serve.js build` 生成
 
 | 支付宝 | 微信 |
 | ------ | ---- |
-|        |      |
+| <img src="docs/alipay.png" alt="支付宝收款码" height="200"> | <img src="docs/wechat.png" alt="微信收款码" height="200"> |
 
 ## 开源协议
 
