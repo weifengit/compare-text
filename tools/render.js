@@ -20,7 +20,12 @@
  *   4. 默认布局下面板只有约 186px 高 → 注入无头布局：隐藏主区域1/2、.pdfarea 撑满
  *   5. console 走管道会缓冲 → 日志写 stderr，并带看门狗
  *   6. 协同滚动解除后面板状态与交互态不同 → 不依赖界面滚动联动（只截面板）
- *   另外：页几何必须在滚动到该页之后量（scrollTop=0 时第 2 页起都在视口外，clipH 为负）
+ *   7. 面板可视高度有限：一次截只能拿到可见部分（长页必被截断）；而"把面板撑高再一次截整篇"
+ *      已被 spike 证伪（视口外内容整片空白）→ 一页按可视高度分多次滚动切片，在 Node 内拼成
+ *      整页一张图：每次切片都落在"内容确实在视口内"的已验证区间，与页高无关。
+ *
+ * 快照一律"按页"出图（PDF 取 .pdf-page、docx 取分页块）：只按页元素矩形与面板可视内容盒求交，
+ * 不做字符级/段落级的锚点对齐——报告里的图是给人看的整页视觉记录，不需要像素级对齐文字锚点。
  */
 var fs = require('fs');
 var os = require('os');
@@ -99,6 +104,10 @@ function poll(expr, pred, tries, label) {
   })(tries == null ? 40 : tries);
 }
 // 坑 1：captureScreenshot 带超时；负/零 clip 高度会静默挂起，调用方必须先校验 clipH/clipW
+// 实测配置锁定（dsf=2 无头 Edge）：clip.scale=1 会在个别页产出确定性的横向撕裂带（同一行位置
+// 复现：整行残影 + 贯穿整页的横线，重试无用）；fromSurface=false 直接截出全白图。
+// clip.scale=2 + captureBeyondViewport=true + fromSurface=true 是 spike 以来一直验证干净的路径，
+// 多出的 2x 像素在 Node 内 box 降采样回 2x（见 capturePage），细节无损、体积可控。
 function capture(clip, scale) {
   return cdpSend('Page.captureScreenshot', {
     format: 'png',
@@ -107,18 +116,22 @@ function capture(clip, scale) {
     fromSurface: true
   }, 60000).then(function (r) { return Buffer.from(r.data, 'base64'); });
 }
-function pngSize(buf) { return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }; }
+// ---------- PNG 编解码（拼图用）：切片各自成图，必须能在 Node 内合成整页一张图 ----------
+function paeth(a, b, c) {
+  var p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+  return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+}
 
-/** 解码 PNG（RGBA/8bit，常见截图格式），返回 { dark: 暗像素占比(%), w, h }。
- *  逐行 unfilter（Sub/Up/Average/Paeth 全支持），抽样步长 32px 统计暗像素。 */
-function pngStats(buf) {
-  function paeth(a, b, c) {
-    var p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
-    return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-  }
+/** 解码 8bit / 非隔行的 RGB(2) 或 RGBA(6) PNG（Chrome 截图即此二者）→ { w, h, rgba }；
+ *  其它格式返回 null（调用方据此判定"截到坏图"）。逐行 unfilter，Sub/Up/Average/Paeth 全支持。 */
+function decodePng(buf) {
+  if (buf.length < 33 || buf.readUInt32BE(0) !== 0x89504e47) return null;
   var w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
-  if (w < 1 || h < 1 || w > 20000 || h > 20000) return { dark: 0, w: w, h: h };
-  var bpp = 4, stride = w * bpp, off = 8, idat = [];
+  var depth = buf[24], ctype = buf[25], interlace = buf[28];
+  if (depth !== 8 || interlace !== 0 || (ctype !== 2 && ctype !== 6)) return null;
+  if (w < 1 || h < 1 || w > 20000 || h > 20000) return null;
+  var bpp = ctype === 6 ? 4 : 3, stride = w * bpp;
+  var off = 8, idat = [];
   while (off + 8 <= buf.length) {
     var len = buf.readUInt32BE(off), type = buf.toString('ascii', off + 4, off + 8);
     if (type === 'IDAT') idat.push(buf.slice(off + 8, off + 8 + len));
@@ -126,27 +139,110 @@ function pngStats(buf) {
     if (type === 'IEND') break;
   }
   var raw;
-  try { raw = zlib.inflateSync(Buffer.concat(idat)); } catch (e) { return { dark: 0, w: w, h: h }; }
-  var prev = Buffer.alloc(stride), cur = Buffer.alloc(stride), pos = 0;
-  var dark = 0, tot = 0;
-  for (var y = 0; y < h; y++) {
-    if (pos >= raw.length) break;
+  try { raw = zlib.inflateSync(Buffer.concat(idat)); } catch (e) { return null; }
+  if (raw.length < (stride + 1) * h) return null;
+  var rgba = Buffer.alloc(w * h * 4);
+  var prev = Buffer.alloc(stride), cur = Buffer.alloc(stride), pos = 0, x, y;
+  for (y = 0; y < h; y++) {
     var f = raw[pos++];
     raw.copy(cur, 0, pos, pos + stride); pos += stride;
     if (f === 1) for (var i = bpp; i < stride; i++) cur[i] = (cur[i] + cur[i - bpp]) & 255;
     else if (f === 2) for (var j = 0; j < stride; j++) cur[j] = (cur[j] + prev[j]) & 255;
     else if (f === 3) for (var k = 0; k < stride; k++) cur[k] = (cur[k] + ((k < bpp ? 0 : cur[k - bpp]) + prev[k]) >> 1) & 255;
     else if (f === 4) for (var m = 0; m < stride; m++) cur[m] = (cur[m] + paeth(m < bpp ? 0 : cur[m - bpp], prev[m], m < bpp ? 0 : prev[m - bpp])) & 255;
-    if (y % 8 === 0) {
-      for (var x = 0; x < w; x += 32) {
-        var i0 = x * bpp;
-        if ((cur[i0] + cur[i0 + 1] + cur[i0 + 2]) / 3 < 128) dark++;
-        tot++;
-      }
+    for (x = 0; x < w; x++) {
+      var s = x * bpp, d = (y * w + x) * 4;
+      rgba[d] = cur[s]; rgba[d + 1] = cur[s + 1]; rgba[d + 2] = cur[s + 2];
+      rgba[d + 3] = ctype === 6 ? cur[s + 3] : 255;
     }
     var t = prev; prev = cur; cur = t;
   }
-  return { dark: tot ? +(100 * dark / tot).toFixed(2) : 0, w: w, h: h };
+  return { w: w, h: h, rgba: rgba };
+}
+
+var CRC_TABLE = (function () {
+  var t = new Int32Array(256);
+  for (var n = 0; n < 256; n++) {
+    var c = n;
+    for (var k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c;
+  }
+  return t;
+})();
+function crc32(buf) {
+  var c = -1;
+  for (var i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 255] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+function pngChunk(type, data) {
+  var head = Buffer.alloc(8), crc = Buffer.alloc(4);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, 'ascii');
+  crc.writeUInt32BE(crc32(Buffer.concat([head.slice(4), data])), 0);
+  return Buffer.concat([head, data, crc]);
+}
+/** 编码 RGBA → PNG（8bit RGBA、过滤器固定 0，体积交给 zlib） */
+function encodePng(w, h, rgba) {
+  var stride = w * 4, raw = Buffer.alloc((stride + 1) * h);
+  for (var y = 0; y < h; y++) {
+    raw[y * (stride + 1)] = 0;
+    rgba.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
+  }
+  var ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw, { level: 6 })),
+    pngChunk('IEND', Buffer.alloc(0))
+  ]);
+}
+
+/** 整数倍 box 降采样（f=2：2×2 块取均）→ 新对象 {w,h,rgba}；f<=1 原样返回 */
+function downscale(img, f) {
+  if (!(f > 1)) return img;
+  var w = Math.floor(img.w / f), h = Math.floor(img.h / f);
+  var out = Buffer.alloc(w * h * 4);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var r = 0, g = 0, b = 0, a = 0;
+      for (var dy = 0; dy < f; dy++) {
+        for (var dx = 0; dx < f; dx++) {
+          var i = ((y * f + dy) * img.w + (x * f + dx)) * 4;
+          r += img.rgba[i]; g += img.rgba[i + 1]; b += img.rgba[i + 2]; a += img.rgba[i + 3];
+        }
+      }
+      var n = f * f, d = (y * w + x) * 4;
+      out[d] = Math.round(r / n); out[d + 1] = Math.round(g / n);
+      out[d + 2] = Math.round(b / n); out[d + 3] = Math.round(a / n);
+    }
+  }
+  return { w: w, h: h, rgba: out };
+}
+
+/** 把切片的 [srcTop, h) 行贴到整页画布的 dstRow（宽度取两者较小值，防越界）；返回写入行数 */
+function blit(dst, dstW, src, srcTop, dstRow) {
+  var dstH = Math.floor(dst.length / 4 / dstW);
+  var rows = Math.max(0, Math.min(src.h - srcTop, dstH - dstRow));
+  var cols = Math.min(src.w, dstW);
+  for (var y = 0; y < rows; y++) {
+    src.rgba.copy(dst, (dstRow + y) * dstW * 4, ((srcTop + y) * src.w) * 4, ((srcTop + y) * src.w + cols) * 4);
+  }
+  return rows;
+}
+
+/** 暗像素占比（%）：抽样步长 32px，用于识别空白图 / 坏帧 */
+function darkRatio(rgba, w, h) {
+  var dark = 0, tot = 0;
+  for (var y = 0; y < h; y += 8) {
+    for (var x = 0; x < w; x += 32) {
+      var i = (y * w + x) * 4;
+      if ((rgba[i] + rgba[i + 1] + rgba[i + 2]) / 3 < 128) dark++;
+      tot++;
+    }
+  }
+  return tot ? +(100 * dark / tot).toFixed(2) : 0;
 }
 function cleanup() {
   clearTimeout(WATCHDOG);
@@ -167,43 +263,117 @@ var WATCHDOG = setTimeout(function () {
 }, 240000);
 
 // ---------- 逐页快照采集（B4） ----------
-/** 坑 3：把某页滚到面板顶部并确认"稳住了"；末页目标值 clamp 到 scrollHeight-clientHeight */
-function scrollPageToTop(pid, sel, k) {
-  var target = -1;
+/** 坑 3：把面板滚到指定位置并确认"稳住了"；目标值在页面内 clamp 到 scrollHeight-clientHeight
+ *  （末页目标会超过滚动上限，不 clamp 会永远判定"没收敛"，白白重试多轮） */
+function scrollPanelTo(pid, target) {
+  var want = -1;
   return (async function () {
     for (var attempt = 1; attempt <= 6; attempt++) {
-      target = await evaluate('(function(){var p=document.getElementById(' + JSON.stringify(pid) + ');' +
-        'var el=p.querySelectorAll(' + JSON.stringify(sel) + ')[' + k + '];' +
-        'var want=Math.min(Math.max(0,el.getBoundingClientRect().top-p.getBoundingClientRect().top+p.scrollTop-4),' +
-        'p.scrollHeight-p.clientHeight);p.scrollTop=want;return Math.round(want);})()');
+      want = await evaluate('(function(){var p=document.getElementById(' + JSON.stringify(pid) + ');' +
+        'var want=Math.min(Math.max(0,' + Math.round(target) + '),p.scrollHeight-p.clientHeight);' +
+        'p.scrollTop=want;return Math.round(want);})()');
       await wait(220);
       var now = await evaluate('document.getElementById(' + JSON.stringify(pid) + ').scrollTop');
-      if (Math.abs(now - target) < 2) {
+      if (Math.abs(now - want) < 2) {
         await wait(180);   // 再观察一次：确认没被后续帧拉回
         var again = await evaluate('document.getElementById(' + JSON.stringify(pid) + ').scrollTop');
-        if (Math.abs(again - target) < 2) return { ok: true, target: target, attempts: attempt };
+        if (Math.abs(again - want) < 2) return { ok: true, target: want, attempts: attempt };
       }
     }
-    return { ok: false, target: target, attempts: 6 };
+    return { ok: false, target: want, attempts: 6 };
   })();
 }
 
-/** 页几何必须滚动到该页之后量（scrollTop=0 时第 2 页起都在视口外） */
-function pageGeom(pid, sel, k) {
+/**
+ * 切片几何：页元素矩形 ∩ 面板可视内容盒，全部视口坐标。
+ * 可视内容盒用 clientWidth/clientHeight 推（二者已排除滚动条）：面板是 overflow:auto，
+ * 若用 pr.right-border-padding 去算，会把滚动条那一条也算成可视内容，截图右/下边缘
+ * 会带上一条面板底色 + 相邻面板的边线（旧实现"左侧截图把右侧也截进来"的来源之一）。
+ *   - 纵向求交：一次只截"确实看得见"的那段，长页靠多次滚动切片覆盖
+ *   - 横向求交：页比面板宽时（docx 缩放不足，元素矩形会伸出面板）按元素矩形取
+ *     会把相邻面板的内容一起截进来，必须夹在可视内容盒内
+ *   - offStart/offEnd：该切片对应的"页内像素"纵向范围，供拼回整页
+ *   - base：页顶在滚动内容中的坐标（扣掉面板自身 border+padding），滚动定位用
+ */
+function sliceGeom(pid, sel, k) {
   return evalJson('JSON.stringify((function(){var p=document.getElementById(' + JSON.stringify(pid) + ');' +
-    'var secs=p.querySelectorAll(' + JSON.stringify(sel) + ');' +
-    'var er=secs[' + k + '].getBoundingClientRect(),pr=p.getBoundingClientRect();' +
-    'var top=Math.max(pr.top,er.top),bot=Math.min(pr.bottom,er.bottom);' +
-    'return {clipX:er.left+window.scrollX,clipY:top+window.scrollY,clipW:er.width,' +
-    'clipH:bot-top,pageH:er.height,visible:bot-top};})())');
+    'var el=p.querySelectorAll(' + JSON.stringify(sel) + ')[' + k + '];' +
+    'var er=el.getBoundingClientRect(),pr=p.getBoundingClientRect();' +
+    'var cs=getComputedStyle(p),q=function(n){return parseFloat(cs[n])||0;};' +
+    'var bt=q("borderTopWidth"),bl=q("borderLeftWidth"),pt=q("paddingTop"),pl=q("paddingLeft");' +
+    'var vl=pr.left+bl+pl,vr=vl+p.clientWidth-pl-q("paddingRight");' +
+    'var vt=pr.top+bt+pt,vb=vt+p.clientHeight-pt-q("paddingBottom");' +
+    'var x0=Math.max(er.left,vl),x1=Math.min(er.right,vr);' +
+    'var y0=Math.max(er.top,vt),y1=Math.min(er.bottom,vb);' +
+    'return {clipX:x0+window.scrollX,clipY:y0+window.scrollY,clipW:x1-x0,clipH:y1-y0,' +
+    'pageH:er.height,pageW:er.width,offStart:y0-er.top,offEnd:y1-er.top,' +
+    'base:er.top-pr.top+p.scrollTop-(bt+pt),visH:vb-vt,visW:vr-vl};})())');
 }
 
-/** 逐页快照（scale=2 保证放大清晰）：返回 [{data,w,h}]；任何一页失败即抛错（该对计入 warning） */
+/**
+ * 按页出图：一页 = 多次"滚动步进 + 截可视区"，在 Node 内拼成整页一张图。
+ * 面板可视高度有限，一次截只能拿到可见部分（长页必被截断）；把面板撑高再一次截整篇又被
+ * spike 证伪（视口外内容整片空白）。切片拼图两难皆避：每片都在已验证的"内容确实可见"区间。
+ * 返回 { rgba, w, h, filled, dark }（仍未编码，交给调用方校验后再编码）。
+ */
+async function capturePage(pid, sel, k, scale, label) {
+  var g0 = await sliceGeom(pid, sel, k);
+  if (!(g0.pageH > 2) || !(g0.clipW > 2)) {
+    throw new Error(label + ' 第 ' + (k + 1) + ' 页尺寸异常（页高 ' + g0.pageH.toFixed(1) +
+      '，可视宽 ' + g0.clipW.toFixed(1) + '）');
+  }
+  var canvas = null, W = 0, H = 0, ratio = 0, filled = 0, slices = 0;
+  var off = 0, guard = Math.ceil(g0.pageH / Math.max(40, g0.visH)) + 8;
+  while (off < g0.pageH - 1 && guard-- > 0) {
+    var sc = await scrollPanelTo(pid, g0.base + off);
+    var g = await sliceGeom(pid, sel, k);
+    // 坑 1：负/零高度 clip 会永久挂起，先校验
+    if (!(g.clipH > 2) || !(g.clipW > 2)) {
+      throw new Error(label + ' 第 ' + (k + 1) + ' 页 ' + Math.round(off) + 'px 处不在视口内（clipH=' +
+        g.clipH.toFixed(1) + '，scrollTop 目标 ' + sc.target + '，稳定=' + sc.ok + '）');
+    }
+    var buf = await capture({ x: g.clipX, y: g.clipY, width: g.clipW, height: g.clipH }, scale);
+    var img = decodePng(buf);
+    if (!img) throw new Error(label + ' 第 ' + (k + 1) + ' 页切片解码失败（非 8bit RGB/RGBA PNG）');
+    // 截图像素比 = dpr × clip.scale（dpr=2 强制 + scale=2 → 4x）。目标成图固定 2x（与文档约定的
+    // 1224×1584/页一致）：高于 2x 的部分 box 降采样回来，细节不变（画布本来就是 2x 光栅化）、
+    // 体积只有 4x 直存的 1/4 左右。
+    img = downscale(img, Math.max(1, Math.round(img.w / g.clipW / 2)));
+    if (!canvas) {
+      // 像素比由实拍图反推（dpr × clip.scale ÷ 降采样倍率），不假设 devicePixelRatio 的具体值
+      ratio = img.w / g.clipW;
+      W = img.w;
+      H = Math.max(1, Math.round(g.pageH * ratio));
+      canvas = Buffer.alloc(W * H * 4, 255);   // 白底：任何未覆盖的行都是页外空白
+    }
+    // 滚动到底被 clamp 时，末尾切片会与上一片重叠：必须按"已覆盖到的页内位置"裁掉重叠部分，
+    // 否则同一段内容会被当成新内容往后贴（表现为页面内容重复出现一截）
+    var coveredCss = filled / ratio;
+    var skipCss = Math.max(0, coveredCss - g.offStart);
+    var srcTop = Math.round(skipCss * ratio);
+    var dstRow = Math.max(filled, Math.min(H - 1, Math.round((g.offStart + skipCss) * ratio)));
+    if (img.h - srcTop > 0) filled = Math.min(H, dstRow + blit(canvas, W, img, srcTop, dstRow));
+    slices++;
+    off = g.offEnd;   // 推进到"本片已覆盖到的页内位置"，被 clamp 时也不会原地打转
+  }
+  return { rgba: canvas, w: W, h: H, filled: filled, slices: slices, dark: darkRatio(canvas, W, H) };
+}
+
+/** 逐页快照：返回 [{data,w,h}]；任何一页失败即抛错（该对计入 warning） */
 async function snapSide(side, pid, sel, label) {
   var n = await evaluate('document.getElementById(' + JSON.stringify(pid) + ').querySelectorAll(' + JSON.stringify(sel) + ').length');
   var pages = [];
+  var wide = await evalJson('JSON.stringify((function(){var p=document.getElementById(' + JSON.stringify(pid) + ');' +
+    'var el=p.querySelectorAll(' + JSON.stringify(sel) + ')[0];if(!el)return {pageW:0,visW:0};' +
+    'var cs=getComputedStyle(p),pr=p.getBoundingClientRect();' +
+    'return {pageW:el.getBoundingClientRect().width,' +
+    'visW:pr.width-(parseFloat(cs.borderLeftWidth)||0)-(parseFloat(cs.borderRightWidth)||0)' +
+    '-(parseFloat(cs.paddingLeft)||0)-(parseFloat(cs.paddingRight)||0)};})())');
+  if (wide.pageW > wide.visW + 1) {
+    log('      ' + label + ' 页宽 ' + Math.round(wide.pageW) + 'px 超出面板可视宽 ' +
+      Math.round(wide.visW) + 'px，横向会按可视区裁边（不越界截到另一侧面板）');
+  }
   for (var k = 0; k < n; k++) {
-    var sc = await scrollPageToTop(pid, sel, k);
     // 坑 6：pdf.js 的 page.render() 是异步的，canvas 尺寸一旦分配 loadedExpr 就返回 true，
     // 但画布可能还没画完（字体/CMap 解析慢或渲染任务排队）。逐页轮询"该页已渲染完成"标记。
     if (typeof PdfView !== 'undefined' && PdfView.isPageRendered) {
@@ -213,29 +383,23 @@ async function snapSide(side, pid, sel, label) {
         function (v) { return JSON.parse(v).ok; }, 120, label + ' 第 ' + (k + 1) + ' 页渲染完成');
     }
     await wait(120);
-    // 坑 7：滚动+截图组合下 CDP capture 可能拿到几何未稳定/合成未更新的坏帧（随机页空白、
-    // 偶发 clip 高度错误）。画布本身经监控验证稳定正常 → 从"结果端"兜底：
-    // 解码刚截的 PNG 校验暗像素与尺寸，异常则重滚重截（最多 3 次），不依赖具体机制。
-    var buf = null;
+    // 坑 7：滚动+截图组合下 CDP capture 可能拿到几何未稳定/合成未更新的坏帧（随机空白、
+    // 偶发 clip 高度错误）。从"结果端"兜底：校验拼图是否覆盖整页、是否有内容，异常重来
+    // （最多 3 次），不依赖具体机制。
+    var shot = null;
     for (var attempt = 1; attempt <= 3; attempt++) {
-      var g = await pageGeom(pid, sel, k);
-      // 坑 1：负/零高度 clip 会永久挂起，先校验
-      if (!(g.clipH > 2) || !(g.clipW > 2)) {
-        throw new Error(label + ' 第 ' + (k + 1) + ' 页不在视口内（clipH=' + g.clipH.toFixed(1) +
-          '，scrollTop 目标 ' + sc.target + '，稳定=' + sc.ok + '）');
-      }
-      buf = await capture({ x: g.clipX, y: g.clipY, width: g.clipW, height: g.clipH }, 2);
-      var px = pngStats(buf);
-      if (px.dark > 0.15 && px.h >= g.clipH * 0.9) break;   // 有内容且高度正常 → 采用
-      log('      ' + label + ' 第 ' + (k + 1) + '/' + n + ' 页截图异常（dark=' + px.dark + '%，h=' + px.h +
-        '，期望 ' + Math.round(g.clipH) + '），第 ' + attempt + ' 次重试');
-      await scrollPageToTop(pid, sel, k);
+      shot = await capturePage(pid, sel, k, 2, label);
+      var covered = shot.filled >= shot.h * 0.98;
+      if (shot.dark > 0.15 && covered) break;
+      log('      ' + label + ' 第 ' + (k + 1) + '/' + n + ' 页截图异常（dark=' + shot.dark + '%，' +
+        '覆盖 ' + shot.filled + '/' + shot.h + 'px），第 ' + attempt + ' 次重试');
       await wait(300);
     }
-    var s = pngSize(buf);
-    pages.push({ data: 'data:image/png;base64,' + buf.toString('base64'), w: s.w, h: s.h });
-    log('      ' + label + ' 第 ' + (k + 1) + '/' + n + ' 页：scrollTop ' + sc.target +
-      '（第' + sc.attempts + '次稳住），' + s.w + '×' + s.h + '，' + (buf.length / 1024).toFixed(0) + 'KB');
+    var buf = encodePng(shot.w, shot.h, shot.rgba);
+    pages.push({ data: 'data:image/png;base64,' + buf.toString('base64'), w: shot.w, h: shot.h });
+    log('      ' + label + ' 第 ' + (k + 1) + '/' + n + ' 页：' + shot.slices + ' 片拼成 ' +
+      shot.w + '×' + shot.h + '（覆盖 ' + shot.filled + '/' + shot.h + 'px，dark=' + shot.dark + '%），' +
+      (buf.length / 1024).toFixed(0) + 'KB');
   }
   return pages;
 }
@@ -397,8 +561,9 @@ function addStats(stats, result) {
   // CDP 能连上（/json/list、WebSocket 均正常）但页面渲染进程不响应 Runtime.evaluate，
   // 显式 Page.navigate 也可能不提交 → 一律带 --no-sandbox 启动（无头本地渲染的常规做法）。
   // --force-device-scale-factor=2：无头下 devicePixelRatio=1，PdfView 按 dpr 光栅化画布
-  // 会把 PDF 页渲染成 1x，capture scale=2 只是把 1x 位图放大 → 文字发虚。强制 dpr=2 后
-  // 画布按 2x 真实光栅化，配合 capture scale=2 得到同尺寸但真 2x 细节的清晰快照。
+  // 会把 PDF 页渲染成 1x → 文字发虚。强制 dpr=2 后画布/文字都按 2x 真实光栅化。
+  // 截图仍按 clip.scale=2（4x 像素）采集——dsf=2 下 scale=1 会踩 Chromium 确定性撕裂
+  // （见 capture() 注释），4x 截回后 Node 内 box 降采样到 2x 成图，细节相同、体积 1/4。
   function launchEdge(extraArgs) {
     var profile = path.join(os.tmpdir(), 'edge-render-' + process.pid + (extraArgs.length ? '-ns' : ''));
     edgeProc = cp.spawn(BROWSER, ['--headless=new', '--disable-gpu', '--no-first-run', '--hide-scrollbars',

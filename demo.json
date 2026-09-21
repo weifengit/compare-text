@@ -2,8 +2,8 @@
   "title": "文档修订对比（docx）",
   "pairs": [
     {
-      "left": "/Users/sonoma/code/compare-text/demo/a.docx",
-      "right": "/Users/sonoma/code/compare-text/demo/b.docx"
+      "left": "E:\\code\\compare-text\\demo\\a.docx",
+      "right": "E:\\code\\compare-text\\demo\\b.docx"
     }
   ],
   "options": {
@@ -14,5 +14,5 @@
     "ignoreWidth": true,
     "ignorePunct": true
   },
-  "output": "/Users/sonoma/code/compare-text/demo/report-docx.html"
+  "output": "E:\\code\\compare-text\\demo\\report-docx.html"
 }
