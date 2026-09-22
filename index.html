@@ -45,10 +45,10 @@
   <main class="main">
     <div class="filterbar" id="filterbar">
       <button id="sidebarToggle" class="btn fb-toggle" type="button" aria-expanded="true" aria-controls="sidebar" title="展开 / 收起侧边栏">☰</button>
-      <label class="fb-item">子文件夹 <select id="dirSel" title="对比源下的子文件夹"></select></label>
-      <label class="fb-item">原始文件 <select id="fileSelL" title="左侧（原文）文件"></select></label>
+      <label class="fb-item">子文件夹 <span class="cb" id="dirSel" title="对比源下的子文件夹（输入过滤，点击选择）" data-placeholder="搜索子文件夹…"></span></label>
+      <label class="fb-item">原始文件 <span class="cb" id="fileSelL" title="左侧（原文）文件（输入过滤，点击选择）" data-placeholder="搜索原始文件…"></span></label>
       <button id="swapBtn" class="btn fb-swap" type="button" title="左右互换：调换左右两侧的文件与内容">⇄</button>
-      <label class="fb-item">修改文件 <select id="fileSelR" title="右侧（修改后）文件"></select></label>
+      <label class="fb-item">修改文件 <span class="cb" id="fileSelR" title="右侧（修改后）文件（输入过滤，点击选择）" data-placeholder="搜索修改文件…"></span></label>
       <div class="fb-actions">
         <button id="resetSplitBtn" class="btn" title="左右拖动调整列宽后，点击恢复左右两区等宽">重置居中</button>
         <button id="tidyBtn" class="btn primary" title="将两侧文本中多余的空格、制表符、换行符与空行统一整理为一行">修整</button>
@@ -119,6 +119,7 @@
 <script src="src/compute.js"></script>
 <script src="src/source-api.js"></script>
 <script src="src/picker.js"></script>
+<script src="src/combobox.js"></script>
 <script src="src/filterbar.js"></script>
 <script src="src/pdfview.js"></script>
 <script src="src/docxview.js"></script>

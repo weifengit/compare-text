@@ -261,6 +261,50 @@ html, body {
   max-width: 240px;
 }
 .fb-item select:focus { outline: none; border-color: var(--accent); }
+/* 可搜索选择框：替代选项极多的 <select>（子文件夹 / 原始文件 / 修改文件） */
+.cb { position: relative; display: inline-block; min-width: 150px; max-width: 240px; }
+.cb-input {
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--txt);
+  font: inherit;
+  box-sizing: border-box;
+}
+.cb-input:focus { outline: none; border-color: var(--accent); }
+.cb-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;              /* 高于 topbar(z5)/内容区，低于弹层 mask(z80)/toast(z99) */
+  min-width: 100%;
+  max-width: 320px;
+  max-height: 280px;
+  overflow: auto;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .12);
+}
+.cb-row {
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+  color: var(--txt);
+}
+.cb-row:hover,
+.cb-row.active { background: #eef3fa; }
+.cb-empty,
+.cb-more { padding: 5px 10px; color: var(--muted); font-size: 12px; }
+.cb-more { font-style: italic; }
 
 /* 编辑器区 */
 .editors {

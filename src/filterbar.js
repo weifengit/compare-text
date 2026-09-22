@@ -25,13 +25,17 @@
 
   function fillSel(sel, items) {
     var keep = sel.value;
-    sel.innerHTML = '';
-    for (var i = 0; i < items.length; i++) {
-      var o = document.createElement('option');
-      o.value = items[i].value;
-      o.textContent = items[i].label;
-      if (items[i].text) o._text = items[i].text; // 字段文本，非 DOM 属性，沙箱兼容
-      sel.appendChild(o);
+    if (sel._setOpts) {           // 可搜索组合框（子文件夹 / 原始文件 / 修改文件）：只存选项，实时过滤由 combobox 处理
+      sel._setOpts(items);
+    } else {                      // 原生 select（字段下拉）
+      sel.innerHTML = '';
+      for (var i = 0; i < items.length; i++) {
+        var o = document.createElement('option');
+        o.value = items[i].value;
+        o.textContent = items[i].label;
+        if (items[i].text) o._text = items[i].text; // 字段文本，非 DOM 属性，沙箱兼容
+        sel.appendChild(o);
+      }
     }
     if (keep && items.some(function (it) { return it.value === keep; })) sel.value = keep;
   }
@@ -99,6 +103,12 @@
     return (side === 'L' ? els.fileL : els.fileR).value || '';
   }
 
+  /** 把含 .cb 类的元素挂载为可搜索组合框；非组合框（如测试桩 / 原生字段下拉）保持原样 */
+  function mountCombo(el) {
+    if (!el || !el.classList || !el.classList.contains('cb')) return;
+    if (root.Combobox && root.Combobox.attach) root.Combobox.attach(el);
+  }
+
   function init(c) {
     cfg.getRoot = c.getRoot || null;
     cfg.onFileChange = c.onFileChange || null;
@@ -108,6 +118,9 @@
     els.field = $('fieldSel');
     els.fileL = $('fileSelL');
     els.fileR = $('fileSelR');
+    mountCombo(els.dir);
+    mountCombo(els.fileL);
+    mountCombo(els.fileR);
     if (els.dir) els.dir.addEventListener('change', function () {
       loadDir(els.dir.value).then(function () { if (cfg.onDirChange) cfg.onDirChange(); });
     });
