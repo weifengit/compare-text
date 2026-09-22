@@ -316,6 +316,143 @@ window.__ModuleLoader__.load({
       });
     }
 
+    // ============ dsh-worktable 工作台集成（新增；旧入口模式全部保留） ============
+    //
+    // 在 dsh-worktable 的「工作台」侧边栏区块里注册一张项目卡片（协议见
+    // dsh-worktable PRD §5.3/§12/§13）：
+    //   - 卡片组件注册到子座位 sidebar.worktable.project，entry.options.id =
+    //     "compare-text" 即工作台里的项目 id；
+    //   - 点击卡片 → 调用宿主下发的 owner prop openSplit(LayoutSpec)，打开一个
+    //     分栏工作区：主行是一个「浏览器」窗（builtin browser），直接加载
+    //     compare-text 的地址 —— 对比工具 UI 直接渲染在工作台窗口里；
+    //   - 若工作台未安装 / openSplit 不可用（比如旧版工作台），自动回退到旧的
+    //     全屏浮层入口，保证功能不丢。
+
+    var PROJECT_ID = "compare-text";
+    var PROJECT_NAME = "文本对比";
+    var PROJECT_ICON = "\u21C4"; // ⇄
+    var DEFAULT_URL = "http://127.0.0.1:3180/";
+
+    /** 取对比工具实际地址（同源 /compare-text-meta，失败回退默认端口）。 */
+    var metaUrlPromise = null;
+    function getCompareUrl() {
+      if (metaUrlPromise) return metaUrlPromise;
+      metaUrlPromise = fetch(META_URL, { method: "GET", cache: "no-store" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (data) {
+          if (data && typeof data.url === "string" && data.url) return data.url;
+          throw new Error("empty url");
+        })
+        .catch(function (err) {
+          console.warn("[dsh-compare-text] worktable: meta fetch failed, using default:", err);
+          return DEFAULT_URL;
+        });
+      return metaUrlPromise;
+    }
+
+    /** 分栏工作区布局（LayoutSpec，主行一个「浏览器」窗，右侧聊天窗）。 */
+    function buildWorktableSpec(url) {
+      return {
+        id: PROJECT_ID,
+        title: PROJECT_NAME,
+        top: null,
+        main: [{
+          id: "p1",
+          title: "浏览器",
+          min: 320,
+          content: { kind: "builtin", type: "browser", url: url },
+        }],
+        left: null,
+        leftWidth: { default: 260, min: 160, max: 480 },
+        chatWidth: { default: 360, min: 240, max: 600 },
+        topHeight: { default: 200, min: 120, max: 480 },
+        topHeightRatio: 0.35,
+        chatSide: "right",
+        chatFullHeight: false,
+      };
+    }
+
+    /** 工作台卡片（注册进 sidebar.worktable.project 子座位；owner props 由工作台下发）。 */
+    function WorktableCard(props) {
+      var panel = useComparePanel();
+      var id = PROJECT_ID;
+      var hidden = props && props.hidden;
+      if (hidden && hidden.indexOf(id) !== -1) return null;
+      var query = (props && typeof props.query === "string" ? props.query : "").trim().toLowerCase();
+      var name = (props && props.nameOverrides && props.nameOverrides[id]) || PROJECT_NAME;
+      var icon = (props && props.iconOverrides && props.iconOverrides[id]) || PROJECT_ICON;
+      if (query && name.toLowerCase().indexOf(query) === -1) return null;
+      var order = props && Array.isArray(props.order) ? props.order.indexOf(id) + 1000 : undefined;
+      var onOpen = function () {
+        if (props && typeof props.openSplit === "function") {
+          getCompareUrl().then(function (url) {
+            try { props.openSplit(buildWorktableSpec(url)); } catch (err) { console.error("[dsh-compare-text] openSplit failed:", err); }
+          });
+        } else {
+          // 工作台不可用（未装 / 旧版）：回退到旧的全屏浮层。
+          panel.openPanel();
+        }
+        if (props && typeof props.reportUsed === "function") {
+          try { props.reportUsed(id); } catch { /* noop */ }
+        }
+      };
+      react.useEffect(function () {
+        if (props && typeof props.reportMeta === "function") {
+          try { props.reportMeta({ id: id, name: PROJECT_NAME, icon: PROJECT_ICON }); } catch { /* noop */ }
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+      var active = props && props.activeSplitId === id;
+      return jsxs(Fragment, {
+        children: [
+          jsx("button", {
+            type: "button",
+            className: "dsh-wt_card",
+            "data-wt-id": id,
+            "data-on": active ? "true" : "false",
+            onClick: onOpen,
+            title: "打开文本对比工具（工作台）",
+            "aria-label": "打开文本对比工具（工作台）",
+            style: Object.assign({
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              width: "100%",
+              height: 34,
+              padding: "0 10px",
+              boxSizing: "border-box",
+              cursor: "pointer",
+              border: "1px solid var(--dsw-alias-border-l1, #262b36)",
+              borderRadius: 8,
+              background: "var(--dsw-alias-fill-l1, rgba(255,255,255,.02))",
+              color: "var(--dsw-alias-label-primary, #e6e8eb)",
+              font: "inherit",
+              fontSize: 13,
+              textAlign: "left",
+            }, order !== undefined ? { order: order } : {}),
+            children: [
+              jsx("span", {
+                "aria-hidden": true,
+                style: { fontSize: 15, lineHeight: "20px", flex: "none" },
+                children: icon,
+              }),
+              jsx("span", {
+                style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 400 },
+                children: name,
+              }),
+              jsx("span", { "aria-hidden": true, style: { color: "var(--dsw-alias-label-tertiary, #6b7280)", fontSize: 12 }, children: "\u203A" }),
+            ],
+          }),
+          panel.open ? jsx(CompareOverlay, {
+            state: panel.state, url: panel.url, onClose: panel.closePanel,
+          }) : null,
+        ],
+      });
+    }
+
     var inject = ["slots"];
 
     /** 入口 → (插槽名, 组件) 映射；config.entry 选择，缺省 input-right。 */
@@ -337,6 +474,27 @@ window.__ModuleLoader__.load({
           order: 50,
         }, choice.comp);
       });
+      // 新增：dsh-worktable 工作台项目卡片（config.worktable === false 可关闭）。
+      // 工作台未安装时该子座位永不出现，注入无副作用；旧入口模式不受影响。
+      // 注意：SlotCore.register 只把顶层的 key/id/order/label/priority 写进
+      // entry.options，工作台通过 entry.options.id 识别项目 id —— 因此这里必须
+      // 把顶层 id 设为项目 id "compare-text"（不能套一层 options 对象）。
+      // 另外 register 对「未声明的座位」会抛错，这里防御性兜底：工作台缺失时
+      // 静默跳过，绝不影响旧入口模式的注册。
+      if (config == null || config.worktable !== false) {
+        ctx.slots.inject("sidebar.worktable.project", function () {
+          try {
+            return ctx.slots.register({
+              name: "sidebar.worktable.project",
+              id: PROJECT_ID,
+              order: 30,
+            }, WorktableCard);
+          } catch (err) {
+            console.warn("[dsh-compare-text] worktable slot unavailable, skip card:", err);
+            return function () { /* noop disposer */ };
+          }
+        }, "dsh-compare-text: worktable project card");
+      }
     }
 
     exports.apply = apply;
