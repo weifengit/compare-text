@@ -109,11 +109,16 @@ function lanIPv4() {
 var MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon'
+  '.ico': 'image/x-icon',
+  '.wasm': 'application/wasm',
+  '.onnx': 'application/octet-stream',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg'
 };
 var API_MIME = {
   '.pdf': 'application/pdf',
@@ -211,7 +216,7 @@ function start() {
 /** 重建 Tauri 打包用的前端目录 dist/（由 tauri.conf.json 的 beforeBuildCommand 自动调用）。用法：node serve.js build */
 function buildWeb() {
   var DIST = path.join(ROOT, 'dist');
-  var ENTRIES = ['index.html', 'styles.css', 'lib', 'src'];
+  var ENTRIES = ['index.html', 'styles.css', 'lib', 'src', 'models'];
   fs.rmSync(DIST, { recursive: true, force: true });
   fs.mkdirSync(DIST, { recursive: true });
   ENTRIES.forEach(function (name) {

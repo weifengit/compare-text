@@ -38,13 +38,17 @@
   //   onPanelText(side, text),                   文件文本就绪：字段下拉 + 写入编辑区
   //   onPanelsChanged(),                         主区域3 面板变化：重算显隐
   //   onPlaceholder()                            两侧皆空时的状态栏文案
+  //   onScannedPdf(side, absPath, url),          扫描版 PDF（无文字层）检测到：UI 决定是否 OCR
+  //   onOcrProgress(side, info),                 OCR 进度：{ phase:'load'|'page'|'done', page, total, loadedMB? }
+  //   onOcrState(side, state)                    侧 OCR 状态变化：'idle'|'pending'|'running'|'done'|'failed'
   // }
   var cfg = {};
   function init(c) {
     cfg = c || {};
     if (typeof cfg.getText !== 'function') cfg.getText = function () { return ''; };
     if (typeof cfg.getOptions !== 'function') cfg.getOptions = function () { return {}; };
-    var fns = ['setBusy', 'toast', 'onResult', 'onRendered', 'onPanelText', 'onPanelsChanged', 'onPlaceholder'];
+    var fns = ['setBusy', 'toast', 'onResult', 'onRendered', 'onPanelText', 'onPanelsChanged', 'onPlaceholder',
+      'onScannedPdf', 'onOcrProgress', 'onOcrState'];
     for (var i = 0; i < fns.length; i++) {
       if (typeof cfg[fns[i]] !== 'function') cfg[fns[i]] = function () {};
     }
@@ -62,6 +66,17 @@
   var lastCompareIsRestore = false;  // 本次 compare 是否由 tab 恢复发起（抑制历史记录）
   var panelAnnSeq = 0;          // 面板标注流程序号：丢弃过期的异步标注
   var fileSeq = { L: 0, R: 0 }; // 每侧文件加载令牌：同侧新加载作废旧加载（两侧可并行互不干扰）
+  var ocrSeq = 0;               // OCR 流程序号：取消/换文件/切 tab 作废在途 OCR
+  var ocrWorker = null;         // OCR Worker 实例（惰性创建）
+  var ocrWorkerReady = false;   // Worker 已加载运行时（ort+模型+字典）
+  var ocrLoading = false;       // Worker 正在加载运行时
+  var ocrState = { L: 'idle', R: 'idle' };   // 每侧 OCR 状态
+  var ocrPendingSide = null;   // 待 OCR 的侧（扫描版检测到后登记，UI 确认后清除）
+  function setOcrState(side, s) {
+    if (ocrState[side] === s) return;
+    ocrState[side] = s;
+    try { cfg.onOcrState(side, s); } catch (e) { /* 忽略 */ }
+  }
 
   // ---------- 工具 ----------
   function escHtml(s) {
@@ -470,10 +485,24 @@
   }
 
   // ---------- 文件加载（主区域3 面板 + 该侧编辑区文本） ----------
-  /** 作废某侧在途加载（左右互换 / 该侧重新选文件） */
-  function invalidateSide(side) { fileSeq[side]++; }
-  /** 作废两侧在途加载（切换标签页 / 恢复会话） */
-  function invalidateAll() { fileSeq.L++; fileSeq.R++; }
+  /** 作废某侧在途加载（左右互换 / 该侧重新选文件）；同时取消该侧在途 OCR */
+  function invalidateSide(side) {
+    fileSeq[side]++;
+    if (ocrState[side] === 'running' || ocrState[side] === 'pending') setOcrState(side, 'idle');
+    ocrSeq++;                        // 作废在途 OCR（runOcr 内部检查 my === ocrSeq）
+  }
+  /** 作废两侧在途加载（切换标签页 / 恢复会话）；同时取消全部在途 OCR */
+  function invalidateAll() {
+    fileSeq.L++; fileSeq.R++;
+    ocrSeq++;                        // 作废在途 OCR
+    ['L', 'R'].forEach(function (s) { if (ocrState[s] === 'running' || ocrState[s] === 'pending') setOcrState(s, 'idle'); });
+  }
+  /** 取消在途 OCR（UI 取消按钮）。 */
+  function cancelOcr() {
+    ocrSeq++;
+    ['L', 'R'].forEach(function (s) { if (ocrState[s] === 'running' || ocrState[s] === 'pending') setOcrState(s, 'idle'); });
+    ocrPendingSide = null;
+  }
 
   /** docx 字节预检：不通过时返回给用户看的文案，通过返回 null。
    *  0 字节的 .docx 现实中并不少见（网盘/OneDrive 占位文件尚未下载到本地、文件仍在写入或同步中、
@@ -510,7 +539,24 @@
             if (stale()) return;
             return PdfView.extractPanel(side);
           }).then(function (text) {
-            if (stale() || !text) return;
+            if (stale()) return;
+            if (!text || !text.trim()) {
+              // 扫描版 PDF：无文字层（getTextContent 为空）→ 无法直接对比。
+              // 无头模式（__HEADLESS_OCR__=true，render.js 报告通道）自动跑 OCR 不弹窗；
+              // 交互模式交给 UI 层决定（弹确认框）；同时登记该侧为「待 OCR」状态。
+              if (PdfView.getNumPages && PdfView.getNumPages(side) > 0) {
+                var headlessOcr = typeof window !== 'undefined' && window.__HEADLESS_OCR__;
+                if (headlessOcr) {
+                  setOcrState(side, 'pending');
+                  runOcr(side);           // 自动识别（不打断报告流程）
+                } else {
+                  ocrPendingSide = side;
+                  setOcrState(side, 'pending');
+                  if (cfg.onScannedPdf) cfg.onScannedPdf(side, absPath, url);
+                }
+              }
+              return;
+            }
             cfg.onPanelText(side, text);
           }).catch(function (err) {
             if (!stale()) cfg.toast('加载 PDF 失败：' + ((err && err.message) || err), true);
@@ -574,6 +620,139 @@
     });
   }
 
+  // ---------- 扫描版 OCR ----------
+  /** OCR 渲染缩放：页面单位→像素。2x 对 A4 约 1190×1684px，det 长边限制内，识别质量与耗时均衡。 */
+  var OCR_SCALE = 2;
+  /** 每页 OCR 前重置该侧 pending 标记 */
+  var ocrRunToken = { L: 0, R: 0 };
+
+  /** 惰性创建 OCR Worker 并加载运行时（ort + 模型 + 字典）。返回 Promise<Worker>。 */
+  function ensureOcrWorker() {
+    if (ocrWorker && ocrWorkerReady) return Promise.resolve(ocrWorker);
+    if (ocrLoading) {
+      // 已有加载在途：返回一个等它完成的 Promise
+      return new Promise(function (resolve, reject) {
+        var tries = 0;
+        (function poll() {
+          if (ocrWorkerReady) return resolve(ocrWorker);
+          if (++tries > 600) return reject(new Error('OCR 运行时加载超时'));
+          setTimeout(poll, 100);
+        })();
+      });
+    }
+    ocrLoading = true;
+    if (cfg.onOcrProgress) cfg.onOcrProgress('L', { phase: 'load' });
+    return new Promise(function (resolve, reject) {
+      var w;
+      try { w = new Worker('src/ocr-worker.js'); }
+      catch (e) { ocrLoading = false; reject(new Error('无法创建 OCR Worker（当前环境不支持）：' + e.message)); return; }
+      ocrWorker = w;
+      var baseUrl = (typeof location !== 'undefined' && location.origin) ? location.origin + '/' : '';
+      w.onmessage = function (ev) {
+        var m = ev.data || {};
+        if (m.type === 'loaded') {
+          ocrWorkerReady = true;
+          ocrLoading = false;
+          resolve(w);
+        } else if (m.type === 'error' && m.message) {
+          ocrLoading = false;
+          reject(new Error(m.message));
+        }
+      };
+      w.onerror = function (e) {
+        ocrLoading = false;
+        reject(new Error('OCR Worker 出错：' + ((e && e.message) || '未知')));
+      };
+      w.postMessage({ type: 'load', baseUrl: baseUrl });
+    });
+  }
+
+  /** 识别该侧扫描版 PDF 全部页，结果注入面板 + 编辑区。返回 Promise。 */
+  function runOcr(side) {
+    var my = ++ocrSeq;
+    ocrPendingSide = null;
+    setOcrState(side, 'running');
+    var total = (PdfView.getNumPages && PdfView.getNumPages(side)) || 0;
+    if (!total) {
+      setOcrState(side, 'failed');
+      return Promise.reject(new Error('PDF 未加载或页数为 0'));
+    }
+    // 加载运行时（含首次下载/加载模型的进度提示）
+    return ensureOcrWorker().then(function (w) {
+      if (my !== ocrSeq) return;            // 已被取消/换文件
+      var allText = [], allItems = [];
+      var lineOffset = 0;                   // 前面页已占用的行数（textItems 跨页行号连续）
+      var chain = Promise.resolve();
+      for (var p = 1; p <= total; p++) {
+        (function (pageNum) {
+          chain = chain.then(function () {
+            if (my !== ocrSeq) return Promise.reject(new Error('cancelled'));
+            if (cfg.onOcrProgress) cfg.onOcrProgress(side, { phase: 'page', page: pageNum, total: total });
+            return PdfView.renderPageToImage(side, pageNum, OCR_SCALE);
+          }).then(function (img) {
+            if (!img) return null;          // 单页渲染失败：跳过该页
+            return new Promise(function (resolvePage, rejectPage) {
+              var id = ++ocrRunToken[side];
+              var byteLength = img.data.byteLength;
+              var buf = img.data.buffer;
+              var onMsg = function (ev) {
+                var m = ev.data || {};
+                if (m.id !== id) return;
+                w.removeEventListener('message', onMsg);
+                if (m.type === 'result') resolvePage(m.result);
+                else if (m.type === 'error') rejectPage(new Error(m.message || 'OCR 识别失败'));
+              };
+              w.addEventListener('message', onMsg);
+              w.postMessage({
+                type: 'recognize',
+                id: id,
+                data: buf,
+                byteOffset: img.data.byteOffset,
+                byteLength: byteLength,
+                width: img.width, height: img.height, stride: img.width * 4,
+                pageW: img.pageW, pageH: img.pageH, scale: img.scale,
+                pageNum: pageNum, startLine: lineOffset
+              }, [buf]);                     // 转移所有权：主线程不再持有该页像素
+            }).then(function (res) {
+              if (!res) return;
+              if (res.text) allText.push(res.text);
+              if (res.items && res.items.length) {
+                var boxesN = res.items[0].boxes.length;
+                lineOffset += boxesN;
+                allItems = allItems.concat(res.items);
+              }
+            });
+          });
+        })(p);
+      }
+      return chain.catch(function (err) {
+        if (String(err && err.message) === 'cancelled') return;   // 被取消：静默结束
+        throw err;
+      }).then(function () {
+        if (my !== ocrSeq) return;
+        var text = allText.join('\n');
+        if (!text) {
+          setOcrState(side, 'failed');
+          cfg.toast('OCR 未识别出任何文字（可能是空白页或图片质量过低）', true);
+          return;
+        }
+        PdfView.setOcrResult(side, { text: text, items: allItems });
+        cfg.onPanelText(side, text);
+        setOcrState(side, 'done');
+        if (cfg.onOcrProgress) cfg.onOcrProgress(side, { phase: 'done', pages: total });
+      });
+    }).catch(function (err) {
+      if (my !== ocrSeq) return;
+      setOcrState(side, 'failed');
+      cfg.toast('OCR 失败：' + ((err && err.message) || err), true);
+    });
+  }
+
+  /** 当前是否有待 OCR 的扫描版（UI 据此显示提示条） */
+  function hasPendingOcr() { return ocrPendingSide != null; }
+  function getOcrPendingSide() { return ocrPendingSide; }
+  function getOcrState(side) { return ocrState[side] || 'idle'; }
+
   // ---------- 折叠状态 ----------
   function setFoldEnabled(on) { foldEnabled = !!on; }
   function isFoldEnabled() { return foldEnabled; }
@@ -612,6 +791,12 @@
     loadSide: loadSide,
     invalidateSide: invalidateSide,
     invalidateAll: invalidateAll,
-    docxBytesError: docxBytesError
+    docxBytesError: docxBytesError,
+    // 扫描版 OCR
+    runOcr: runOcr,
+    cancelOcr: cancelOcr,
+    hasPendingOcr: hasPendingOcr,
+    getOcrPendingSide: getOcrPendingSide,
+    getOcrState: getOcrState
   };
 })(typeof self !== 'undefined' ? self : this);

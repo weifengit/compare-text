@@ -541,6 +541,8 @@ async function renderPair(pair, opts, idx) {
   }
   await evaluate('(function(){var M=' + JSON.stringify(M) + ';for(var id in M)' +
     'document.getElementById(id).checked=!!M[id];return 1;})()');
+  // 扫描版 PDF 自动识别：无头模式不弹确认框，检测到无文字层即自动跑 OCR（见 pipeline.js）
+  await evaluate('window.__HEADLESS_OCR__ = true; 1');
   await evaluate('Pipeline.loadSide("L", ' + JSON.stringify(left.replace(/\\/g, '/')) + ')');
   await evaluate('Pipeline.loadSide("R", ' + JSON.stringify(right.replace(/\\/g, '/')) + ')');
 
@@ -563,6 +565,32 @@ async function renderPair(pair, opts, idx) {
   await poll(loadedExpr('L', kindL), function (v) { return JSON.parse(v).ok; }, 60, 'L 面板渲染');
   await poll(loadedExpr('R', kindR), function (v) { return JSON.parse(v).ok; }, 60, 'R 面板渲染');
   await evaluate('document.fonts.ready.then(function(){return 1})');
+
+  // 扫描版 PDF：等两侧 OCR 落定（自动识别在后台跑）。失败记 warning，报告仍继续（该侧文本为空）。
+  if (kindL === 'pdf' || kindR === 'pdf') {
+    var ocrSides = [];
+    if (kindL === 'pdf') ocrSides.push('L');
+    if (kindR === 'pdf') ocrSides.push('R');
+    for (var oi = 0; oi < ocrSides.length; oi++) {
+      var os = ocrSides[oi];
+      var st = await poll('JSON.stringify({s:(typeof Pipeline.getOcrState==="function")?' +
+        'Pipeline.getOcrState(' + JSON.stringify(os) + '):"none",ed:(function(){var eds=document.querySelectorAll(".CodeMirror");' +
+        'return eds.length>1?eds[' + (os === 'L' ? 0 : 1) + '].CodeMirror.getValue().length:0;})()})',
+        function (v) {
+          var s = JSON.parse(v);
+          // 文字层 PDF 直接 idle；扫描版 OCR 完成（done）或该侧编辑器已有文本即通过
+          return s.s === 'idle' || s.s === 'done' || s.ed > 0 || s.s === 'failed';
+        }, 240, os + ' 侧 OCR 完成');   // 240×300ms≈72s，覆盖首次模型加载 + 逐页识别
+      var stj = JSON.parse(st);
+      if (stj.s === 'failed') {
+        var msg = '第 ' + (idx + 1) + ' 对 ' + os + ' 侧扫描版 OCR 失败（报告该侧无文本）';
+        log('  !! ' + msg);
+        warnings.push(msg);
+      } else if (stj.s === 'pending' || stj.s === 'running') {
+        log('  ' + os + ' 侧是扫描版 PDF，已自动 OCR（' + stj.s + ' → 完成）');
+      }
+    }
+  }
 
   // 报告默认执行一遍"修整"（同界面"修整"按钮：Norm.tidyText 去全部空白整理为单行），缩小报告空间占用。
   // 先等编辑器写入面板原文——PDF 提词晚于画布渲染，否则修整会被随后到来的原文覆盖。

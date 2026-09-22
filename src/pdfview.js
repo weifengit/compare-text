@@ -569,6 +569,71 @@
     return !!(a && a[pageNum - 1]);
   }
 
+  /** 某侧已加载 PDF 的页数（未加载 → 0）。 */
+  function getNumPages(side) {
+    var pdf = docs[side];
+    return pdf ? (pdf.numPages || 0) : 0;
+  }
+
+  /**
+   * 扫描版专用：把 OCR 结果注入本侧面板，替换「无文字层」的空文本项。
+   * res = { text, items }：
+   *   text  = 全部页识别文本（按阅读顺序，跨页 '\n' 拼接）
+   *   items = [{ page, boxes:[{transform,width,line,col,str,hasEOL}] }]（Ocr.linesToTextItems 输出，
+   *           行号与 text 一一对应）→ 与 collectItems 产出同构，computeHlBoxes 等直接复用。
+   * 要点：bump loadSeq 作废在途 collectItems（扫描件 getTextContent 为空，collectItems 完成后会把
+   * textItems 覆盖成空）；随后重建行位索引并重绘标注/文本层。
+   */
+  function setOcrResult(side, res) {
+    if (!res || typeof res.text !== 'string') return;
+    var p = panels[side];
+    if (!p) return;
+    loadSeq[side]++;                          // 作废在途 collectItems，防止空文本项覆盖 OCR 项
+    panelText[side] = res.text;
+    textItems[side] = res.items || [];
+    posIndex[side] = null; posVer[side]++;
+    applyHighlights(side);
+    applyTextLayer(side);
+    try { if (afterRender) afterRender(side); } catch (e) { /* 忽略 */ }
+  }
+
+  /**
+   * 扫描版专用：把某页离屏光栅化为 RGBA 像素（供 OCR Worker 识别）。
+   * 返回 Promise<{ data: Uint8ClampedArray(RGBA), width, height, scale, pageW, pageH }>；
+   * scale 为本次渲染缩放（页面单位→像素），pageW/pageH 为 scale=1 视口尺寸（OCR 结果换算回页面单位用）。
+   * 失败/无文档 → null。
+   */
+  function renderPageToImage(side, pageNum, targetScale) {
+    var pdf = docs[side];
+    if (!pdf) return Promise.resolve(null);
+    return pdf.getPage(pageNum).then(function (page) {
+      if (!page) return null;
+      var vp1 = page.getViewport({ scale: 1 });
+      var cssW = vp1.width * targetScale, cssH = vp1.height * targetScale;
+      var pxW = Math.max(1, Math.round(cssW));
+      var pxH = Math.max(1, Math.round(cssH));
+      var vp = page.getViewport({ scale: targetScale });
+      var canvas = document.createElement('canvas');
+      canvas.width = pxW;
+      canvas.height = pxH;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, pxW, pxH);
+      var sx = pxW / vp.width, sy = pxH / vp.height;
+      return page.render({
+        canvasContext: ctx,
+        viewport: vp,
+        transform: (sx !== 1 || sy !== 1) ? [sx, 0, 0, sy, 0, 0] : null,
+        background: '#ffffff'
+      }).promise.then(function () {
+        var img = ctx.getImageData(0, 0, pxW, pxH);
+        if (!img || !img.data) return null;
+        return { data: img.data, width: pxW, height: pxH, scale: targetScale, pageW: vp1.width, pageH: vp1.height };
+      }, function () { return null; });
+    }, function () { return null; });
+  }
+
   /** 与 styles.css 的 .pdf-hl.rm/.ad/.ch 同色（透明度 0.4），供离屏光栅化直接画进像素 */
   var HL_COLORS = { rm: 'rgba(226,70,70,0.40)', ad: 'rgba(80,170,80,0.40)', ch: 'rgba(235,180,50,0.40)' };
 
@@ -764,6 +829,7 @@
     },
     extractText: extractText, extractPanel: extractPanel, getPanelText: getPanelText, segmentFields: segmentFields,
     setHighlight: setHighlight, getHighlight: getHighlight, isLoaded: isLoaded, isPageRendered: isPageRendered,
+    getNumPages: getNumPages, setOcrResult: setOcrResult, renderPageToImage: renderPageToImage,
     rasterizePage: rasterizePage,
     lineOffset: lineOffset, lineAtOffset: lineAtOffset, lineHeight: lineHeightAtLine,
     nextLineOffset: nextLineOffset

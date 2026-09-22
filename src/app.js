@@ -31,6 +31,14 @@
   var pdfareaEl = $('pdfarea');
   var swapBtn = $('swapBtn');
   var resetSplitBtn = $('resetSplitBtn');
+  // 扫描版 OCR 弹窗
+  var ocrMask = $('ocrMask');
+  var ocrFile = $('ocrFile');
+  var ocrProgress = $('ocrProgress');
+  var ocrProgressText = $('ocrProgressText');
+  var ocrErr = $('ocrErr');
+  var ocrSkipBtn = $('ocrSkipBtn');
+  var ocrGoBtn = $('ocrGoBtn');
 
   // ---------- 状态 ----------
   var OPT_MAP = {
@@ -117,6 +125,58 @@
     } catch (e) { /* quota 等异常忽略 */ }
   }
 
+  // ---------- 扫描版 OCR 弹窗（检测 → 确认 → 进度） ----------
+  var ocrSide = null;                  // 当前弹窗对应的侧（'L'|'R'）
+  var ocrBusy = false;                 // OCR 正在跑：弹窗转进度模式
+
+  function showOcrModal(side, absPath) {
+    ocrSide = side;
+    ocrBusy = false;
+    ocrErr.hidden = true;
+    ocrProgress.hidden = true;
+    ocrSkipBtn.hidden = false;
+    ocrSkipBtn.textContent = '跳过';
+    ocrGoBtn.hidden = false;
+    ocrGoBtn.textContent = 'OCR 识别';
+    ocrFile.textContent = baseName(absPath);
+    ocrMask.hidden = false;
+  }
+  function hideOcrModal() {
+    ocrMask.hidden = true;
+    ocrSide = null;
+    ocrBusy = false;
+  }
+  function updateOcrProgress(side, info) {
+    if (side !== ocrSide) return;
+    if (info.phase === 'load') {
+      // 首次加载模型：弹窗转进度
+      ocrBusy = true;
+      ocrProgress.hidden = false;
+      ocrProgressText.textContent = '正在加载 OCR 模型（首次约 15MB，之后复用）…';
+      ocrSkipBtn.hidden = true;
+      ocrGoBtn.hidden = true;
+    } else if (info.phase === 'page') {
+      ocrProgress.hidden = false;
+      ocrProgressText.textContent = '正在识别第 ' + info.page + ' / ' + info.total + ' 页…';
+    } else if (info.phase === 'done') {
+      ocrProgress.hidden = true;
+    }
+  }
+  ocrSkipBtn.addEventListener('click', function () {
+    if (ocrBusy) { Pipeline.cancelOcr(); hideOcrModal(); toast('已取消 OCR'); return; }
+    hideOcrModal();
+    toast('已跳过扫描版 PDF（无文字可对比）');
+  });
+  ocrGoBtn.addEventListener('click', function () {
+    if (ocrBusy || !ocrSide) return;
+    ocrBusy = true;
+    ocrProgress.hidden = false;
+    ocrProgressText.textContent = '正在准备…';
+    ocrSkipBtn.hidden = true;
+    ocrGoBtn.hidden = true;
+    Pipeline.runOcr(ocrSide);
+  });
+
   // ---------- 对比管线接线（差异计算 / 结果区渲染 / 主区域3 标注都在 Pipeline） ----------
   Pipeline.init({
     resultsEl: results,
@@ -143,7 +203,26 @@
     // 主区域3（PDF/Word 面板）显隐随面板加载结果重算
     onPanelsChanged: updatePdfArea,
     // 两侧皆空：状态栏回到初始文案
-    onPlaceholder: function () { statusEl.textContent = '在两侧粘贴文本即可自动对比'; }
+    onPlaceholder: function () { statusEl.textContent = '在两侧粘贴文本即可自动对比'; },
+    // 扫描版 PDF（无文字层）检测到：弹出确认框，用户决定是否 OCR
+    onScannedPdf: function (side, absPath) {
+      showOcrModal(side, absPath);
+    },
+    // OCR 进度：加载模型 / 逐页识别
+    onOcrProgress: function (side, info) {
+      updateOcrProgress(side, info);
+    },
+    // 该侧 OCR 状态变化
+    onOcrState: function (side, state) {
+      if (state === 'running' || state === 'pending') return;   // 弹窗/进度条已由上面回调驱动
+      if (state === 'done') {
+        if (ocrMask && !ocrMask.hidden) hideOcrModal();
+        statusEl.textContent = 'OCR 识别完成，已加入对比';
+        statusEl.classList.remove('bad');
+      } else if (state === 'failed') {
+        if (ocrMask && !ocrMask.hidden) hideOcrModal();
+      }
+    }
   });
 
   // ---------- 事件 -------

@@ -19,7 +19,7 @@
 
 | 提示词                         | 状态                         | 说明                                                                                                                                  |
 | ------------------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| 提示词 1（PaddleOCR）          | **独立，可选**         | 与主线无依赖，随时可做，也可暂缓                                                                                                      |
+| 提示词 1（WASM OCR）        | **已实现**             | 内置 onnxruntime-web + PP-OCRv4（无 Python）；交互弹窗 + 无头报告自动识别双路径，见 `src/ocr.js`/`src/ocr-worker.js` |
 | 提示词 2（云端大模型语义识别） | ⛔**已作废，不要实施** | 接上 dsh 后整块由 harness 承担（dsh 自带 LLM + 工具调用）。应用侧**不再**需要 API Key 配置界面、厂商兼容、prompt 编排、结果渲染 |
 | 提示词 3（对比结果导出）       | 部分并入提示词 4             | 其中的**报告模板 `src/report.js` 与提示词 4 共用**；"人在页面里点导出"这一入口可延后                                          |
 | 提示词 4（无头渲染通道）       | **主线核心**           | 一切的承重墙，先做                                                                                                                    |
@@ -63,7 +63,7 @@
 
 #### 阶段 E：可选 / 独立
 
-- **E1. 提示词 1**：扫描版 PDF 的 PaddleOCR（与主线无依赖）
+- **E1. 扫描版 PDF 的 OCR**（**已实现**）：内置 WASM OCR（onnxruntime-web + PP-OCRv4），无 Python；验收见提示词 1
 - **E2. 桌面（Tauri）模式的无头渲染**（提示词 4 文末"后续扩展"）：两条路，优先考虑让 WebView2 开放调试端口以复用同一套 CDP 驱动代码
 
 ### 交给 AI 开发时的注意事项
@@ -75,54 +75,67 @@
 
 ---
 
-## 提示词 1：扫描版 PDF 的 OCR 识别（连接本机 PaddleOCR 环境）（或者deepseek harness社区插件调用）
+## 提示词 1：扫描版 PDF 的 OCR 识别（内置 WASM OCR，无 Python）
 
 ### 项目背景
 
 这是一个 Tauri 2 + 纯前端（无框架，原生 JS）的离线文本对比工具。仓库结构：
 
-- 前端入口 `index.html`，逻辑在 `src/` 下按模块拆分（`app.js`、`pdfview.js`、`compute.js` 等）
-- PDF 渲染与文本提取用 pdf.js（`lib/pdf.min.js`），文本提取在 `src/pdfview.js` 的 `extractText`（基于 `getTextContent`，**只能提取文字版 PDF，扫描件提取结果为空**）
-- Rust 后端在 `src-tauri/`，目前很薄（仅 log、open 插件），可以通过 `tauri::command` 扩展
-- 当前 CSP（`src-tauri/tauri.conf.json`）：`connect-src 'self' blob: ipc:`
+- 前端入口 `index.html`，逻辑在 `src/` 下按模块拆分（`app.js`、`pipeline.js`、`pdfview.js`、`compute.js`、`ocr.js` 等）
+- PDF 渲染与文本提取用 pdf.js（`lib/pdf.min.js`），文本提取在 `src/pdfview.js` 的 `extractPanel`（基于 `getTextContent`，**只能提取文字版 PDF，扫描件提取结果为空**）
+- 无头报告通道 `tools/render.js`（headless Edge + CDP，驱动同一套 `src/` 模块）
+- 当前 CSP（`src-tauri/tauri.conf.json`）：`connect-src 'self' blob: ipc:`（OCR 资源同源 fetch，无需改）
 
 ### 需求
 
-为扫描版（无文字层）PDF 增加 OCR 识别能力，使这类文件也能参与文本对比。
+为扫描版（无文字层）PDF 增加 OCR 识别能力，使这类文件也能参与文本对比与报告生成。
 
-**已选定的技术路线：应用不内置 OCR，连接用户本机已安装好的 PaddleOCR 环境。** 用户已按官方方式安装：`uv add "paddleocr[doc-parser]"`（含表格识别等高级能力）。
+**已选定的技术路线：应用内置 WASM OCR（onnxruntime-web 1.30 + PP-OCRv4 中文模型）。**
+不依赖 Python / 系统运行时 / 网络：onnx 模型在浏览器/WebView 里用 WebAssembly 推理，全程离线。
+打包增量约 **29MB**（`lib/onnxruntime/` 13.6MB + `models/` 15.5MB，均已 vendored 进仓库并被 `serve.js build` 复制进 `dist/`）。
 
 ### 具体要求
 
-1. **环境检测与配置**
+1. **检测与确认（交互模式）**
 
-   - 应用启动时（或首次需要 OCR 时）自动检测本机可用的 PaddleOCR 环境：尝试常见的 uv venv 路径、`which python`/`python3` 并验证 `import paddleocr` 可用
-   - 设置界面中允许用户手动指定 Python 解释器路径（或 uv 项目目录），并做有效性验证（实际跑一条 `python -c "import paddleocr; print(paddleocr.__version__)"`）
-   - 检测不到环境时给出明确引导文案（如何安装），不要静默失败
-2. **调用方式（已确定：常驻本地 HTTP 服务）**
+   - 加载 PDF 时先走现有 `extractPanel`，若提取结果为空/极少且页数 > 0，判定为扫描件
+   - 弹确认框「检测到扫描版 PDF（无文字层），是否启用本地 OCR 识别？」，**用户确认后才跑**，不默认自动跑；含「跳过」入口
+   - 首次识别需加载模型（约 15MB，之后复用同一运行时，单例缓存）；加载/逐页识别都有进度提示，可取消（取消后状态干净）
+2. **WASM OCR 引擎（src/ocr.js，UMD 三端复用：浏览器 / Web Worker / Node 测试）**
 
-   - 通过 Rust 端 `tauri::command` 拉起 Python 子进程，启动一个**常驻本地 HTTP 服务**封装 PaddleOCR（模型只加载一次，避免每次对比都冷启动数秒~十几秒）
-   - 服务要求：端口随机分配（启动时探测空闲端口）、仅监听 127.0.0.1、应用退出时可靠回收子进程（含异常退出路径，避免残留孤儿进程）；服务异常崩溃后下次请求时自动重启
-   - 接口约定：输入 PDF 文件路径 + 页码范围；输出结构化 JSON（每页的文本行及置信度，**保留版面顺序**）
-   - OCR 在服务进程中执行，超时与取消机制必须有（大文件 OCR 可能数分钟），UI 上显示进度并允许取消（取消时终止服务侧当前任务）
-3. **与对比流程的集成**
+   - 引擎：PP-OCRv4 det + cls + rec（SWHL ONNX 导出，RGB 通道顺序），CTC 解码 + `models/ppocr_keys_v1.txt` 字典（index 0 = blank）
+   - 识别结果含**行级坐标**（det 文本框）→ 经 `linesToTextItems` 转成与 pdf.js `collectItems` **同构**的 textItems（`{transform,width,line,col,str,hasEOL}`）
+   - 差异标注直接画在扫描页上（复用 `computeHlBoxes` 坐标映射，零改动），**不需要**生成文字版 PDF
+   - Worker 封装 `src/ocr-worker.js`（classic Worker，`importScripts` 加载 ort + ocr.js；图片用 transferable 传输；`wasmPaths` 显式给绝对 URL 解决 classic Worker 动态 import 相对路径解析问题）
+3. **与对比流程的集成（src/pipeline.js + src/pdfview.js）**
 
-   - 加载 PDF 时先走现有 `extractText`，若提取结果为空/极少（判定为扫描件），在主区域3（原始文件显示区)显著提示"该 PDF 无文字层，是否启用 OCR 识别？"，用户确认后才启动 OCR，**不要默认自动跑**
-   - OCR 结果作为该侧文本进入现有对比流程，与文字版 PDF 的行为完全一致
-   - OCR 结果按文件缓存（文件内容 hash 为 key），同一文件二次打开直接读缓存
-4. **暂不做**：生成带文字层的可搜索 PDF（可作为后续迭代，本次只产出对比用纯文本）；表格结构识别结果的可视化（doc-parser 能力先透传保留字段即可）
+   - `pipeline.js` 检测扫描件 → `onScannedPdf(side)` 回调 → `runOcr(side)` 逐页识别（`PdfView.renderPageToImage` 离屏渲染 → worker 推理 → 累积 text + items），`setOcrResult` 注入面板，`onPanelText` 进编辑区
+   - 行号跨页连续（`linesToTextItems` 的 `startLine` 参数），OCR 文本与 textItems 行号一一对应
+   - 换文件/切 tab/取消都会作废在途 OCR（`ocrSeq` 令牌）
+4. **无头报告通道（tools/render.js）**
+
+   - 加载侧前设 `window.__HEADLESS_OCR__ = true`：扫描件**自动识别**，不弹窗，报告流程不中断
+   - 识别结果作为该侧文本进对比；快照仍按页截扫描件（OCR 标注后的页面）
+   - 与交互模式共享同一 `src/ocr.js` 代码路径（报告工具不重新实现 OCR）
+5. **DSH 插件生态（可选增强，未强制）**
+
+   - 检测到扫描件时，在 DSH 集成模式下可提醒用户安装社区 OCR 插件
+     （`dsh-md-convert`、`dsh-ocr-local`、`dsh-pdf` 等），用插件输出做报告/对比，与本应用内置 WASM OCR 互为补充
+   - 报告流程 `tools/report.js` 保持接受调用方预置的 OCR 文本（兼容插件侧提取）
 
 ### 约束
 
-- 应用本体打包体积不得因此功能明显增加（Python 环境完全由用户自备，不打包任何模型/解释器）
-- 保持离线：OCR 全程本地，不允许引入任何网络请求
-- 遵循项目 CLAUDE.md：最小改动、匹配现有代码风格、功能模块化（OCR 相关逻辑独立成新文件，不堆进 `pdfview.js`）
+- 应用本体打包体积增量控制在 ~30MB 内（onnx 模型 + ort 运行时，不引入任何 Python 解释器）
+- 保持离线：OCR 全程本地（WASM 推理），不允许任何网络请求；`lib/onnxruntime/` 与 `models/` 必须提交进仓库、被 `serve.js build` 复制
+- 遵循项目 CLAUDE.md：最小改动、匹配现有代码风格、OCR 逻辑独立成模块（`src/ocr.js` + `src/ocr-worker.js`），不堆进 `pdfview.js`
+- 交互与无头（报告）模式必须共享同一 OCR 路径，不允许两份实现
 
 ### 验收标准
 
-- 未装 PaddleOCR 的机器：功能入口给出安装引导，应用其他功能不受影响
-- 装有 PaddleOCR 的机器：打开一份扫描版 PDF，确认后 OCR 出的文本进入对比，差异标注正常；同一文件第二次打开秒开（走缓存）
-- OCR 进行中可取消，取消后应用状态干净（无残留子进程）
+- `node test/ocr.js`：8 项单元 + 真实推理全绿（识别出样例图「去污」「国标」等关键词）
+- `node test/e2e-ocr.js`：浏览器端到端 12 项全绿（扫描件弹窗 → 确认 → 识别文本进编辑区 → **扫描页出现差异标注** → 文字版 PDF 不弹窗）
+- 无头通道：`render.js` 处理含扫描版 PDF 的任务自动识别，报告含两侧快照、无 OCR 失败 warning
+- `npm test` 全绿；交互模式取消 OCR 后状态干净
 
 ---
 

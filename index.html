@@ -109,6 +109,24 @@
   </div>
 </div>
 
+<!-- 扫描版 PDF OCR 确认弹窗 -->
+<div class="ocr-mask" id="ocrMask" hidden>
+  <div class="ocr-modal" role="dialog" aria-label="扫描版 PDF 识别">
+    <div class="ocr-title">检测到扫描版 PDF（无文字层）</div>
+    <div class="ocr-desc">这份 PDF 无法直接提取文字，对比和差异标注需要先识别（OCR）。是否启用本地 OCR 识别？识别结果会自动加入对比，并标注在原扫描页面上。</div>
+    <div class="ocr-file" id="ocrFile"></div>
+    <div class="ocr-hint">首次识别需加载模型（约 15MB，之后复用），全程离线。</div>
+    <div class="ocr-progress" id="ocrProgress" hidden>
+      <span class="spin"></span><span class="ocr-progress-text" id="ocrProgressText"></span>
+    </div>
+    <div class="ocr-err" id="ocrErr" hidden></div>
+    <div class="ocr-actions">
+      <button id="ocrSkipBtn" class="btn" type="button" title="跳过 OCR，不识别这份扫描版">跳过</button>
+      <button id="ocrGoBtn" class="btn primary" type="button">OCR 识别</button>
+    </div>
+  </div>
+</div>
+
 <script src="lib/pdf.min.js"></script>
 <script src="lib/codemirror.min.js"></script>
 <script src="lib/diff.min.js"></script>
@@ -125,6 +143,7 @@
 <script src="src/docxview.js"></script>
 <script src="src/syncscroll.js"></script>
 <script src="src/tabs.js"></script>
+<script src="src/ocr.js"></script>
 <script src="src/pipeline.js"></script>
 <script src="src/app.js"></script>
 <script src="src/external-links.js"></script>
