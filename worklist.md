@@ -45,3 +45,12 @@ node tools/render.js --task demo.json && open demo/report-docx.html
 
 
 请打开E:\code\compare-text\0056 沉香.html，请看对应的图片区域，存在的问题，截取的图片五颜六色的花纹，请看一下，修复。是不是滚动的问题，我说了生成报告的时候，可以不用左右两边按照字符或者段落去对齐，直接截图即可，比如左边3页右边4页，将每页直接转为图片（注意好是左边还是右边，并且注意顺序），然后将对应位置插入html中即可啊。左1右1、左2右2、左3右3、左（空）右4渲染出来即可。
+
+
+# 1. 改版本号（三处保持一致）：
+#    package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml 的 version
+# 2. 提交并推送 main
+git add -A && git commit -m "提交信息" && git push origin main
+# 3. 打 tag 并推送（tag 就是版本发布按钮）
+git tag v0.3.0 && git push origin v0.3.0
+
