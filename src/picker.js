@@ -16,6 +16,7 @@
   var els = {};
   var cur = null;        // 当前浏览位置 {path, parent, kind:'dir'|'drives', dirs}
   var navTok = 0;        // 导航令牌：丢弃过期 browse 响应
+  var pickIntent = null; // open(cb) 的可选回调：确认后优先调用（一次性，导出报告选目录用）
 
   function $(id) { return document.getElementById(id); }
 
@@ -108,7 +109,10 @@
     navigate(p);
   }
 
-  function open() {
+  function open(cb) {
+    // 可选回调：本次确认后优先调用 cb（如"导出报告"选保存目录），不覆盖 init 的 onPick。
+    // 同一时刻只有一个"待确认"意图；open() 会替换上次未确认的 intent。
+    pickIntent = (typeof cb === 'function') ? cb : null;
     var src = String((cfg.input && cfg.input.value) || '').trim();
     // 未完成浏览时保留现场：来源路径没变就接着上次位置浏览（避免误关/关闭后重头再来）；变了才从新路径开始
     if (!cur || !cur.path || cur.path !== src) {
@@ -137,7 +141,9 @@
     browse(p).then(function (d) {
       if (cfg.input) cfg.input.value = d.path;
       close();
-      if (cfg.onPick) cfg.onPick(d.path);
+      var cb = pickIntent; pickIntent = null;
+      if (cb) cb(d.path);
+      else if (cfg.onPick) cfg.onPick(d.path);
     }).catch(function (e) {
       setErr((e && e.message) || '该路径不可用');
     }).then(function () { showLoading(false); });

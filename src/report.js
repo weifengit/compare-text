@@ -8,12 +8,15 @@
  *   cfg = {
  *     title:  报告标题
  *     time:   对比时间（字符串，调用方已格式化）
- *     pairs:  [{ leftName, rightName, result, shots }]
+ *     pairs:  [{ leftName, rightName, result, shots, rawText? }]
  *               leftName/rightName: 两侧文件名
  *               result:  Pipeline.getResult()（mode/rows/segs/stats…）
  *               shots:   { L:[{data,w,h}], R:[{data,w,h}] }  每页快照（base64 dataURL）
+ *               rawText: { L, R } 修整前原始文本（可选；提供后"取消修整"按钮才有内容切换，
+ *                         缺省时按钮仍显示但点击提示无原始文本数据）
  *   }
  * 每对 = 头部摘要 + 双视图（左右分栏 / Redline 合并，报告内一键切换）+ 区域3 左/右快照。
+ * 头部右侧按钮组（flex 右对齐，竖线分隔）：【取消修整】【隐藏文字区】｜【左右分栏】【Redline 合并】。
  * 多对时：开头带总览（每对一行：文件名、差异数、锚点超链接），右侧带悬浮导航
  * （参考 base.html #floating-nav：右侧中部固定、半透明胶囊、悬停变实、窄屏收缩）。
  * 一份报告最多 10 对，超出由调用方分卷（本模块不自行分卷，tools/render.js 在入口处拦截）。
@@ -48,6 +51,8 @@
     '.rep-col{background:var(--panel);min-width:0}.rep-col+.rep-col{border-left:1px solid var(--border)}' +
     '.rep-colhead{background:#eef3f9;border-bottom:1px solid var(--border);padding:4px 10px;' +
     'font-size:12px;color:var(--muted);font-weight:600}' +
+    // 左右协同滚动：两栏各自独立滚动容器（等高），JS 同步 scrollTop
+    '.rep-sync{overflow:auto;max-height:520px}' +
     '.rep-grid{font-family:var(--mono);font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all}' +
     '.rep-grid .row{display:flex}.rep-grid .ln{flex:0 0 44px;text-align:right;padding-right:8px;' +
     'color:var(--line-num);user-select:none;border-right:1px solid var(--border);margin-right:8px}' +
@@ -76,10 +81,22 @@
     '.rep-toc .rep-toc-no{color:var(--muted);width:30px}' +
     '.rep-toc a{color:#1158c7;text-decoration:none}.rep-toc a:hover{text-decoration:underline}' +
     // C2 双视图切换 + Redline 合并视图（删除=红色删除线，新增=蓝色下划线）
-    '.rep-viewsw{margin-left:auto;display:flex;gap:4px}' +
-    '.rep-viewsw button{font:inherit;font-size:12px;padding:2px 10px;border:1px solid var(--border);' +
+    '.rep-pairbtns{margin-left:auto;display:flex;gap:4px;align-items:center}' +
+    '.rep-pairbtns button{font:inherit;font-size:12px;padding:2px 10px;border:1px solid var(--border);' +
     'background:#fff;border-radius:4px;cursor:pointer;color:var(--muted)}' +
-    '.rep-viewsw button.on{background:#eef3f9;color:var(--txt);font-weight:600;border-color:#c8d4e2}' +
+    '.rep-pairbtns button.on{background:#eef3f9;color:var(--txt);font-weight:600;border-color:#c8d4e2}' +
+    // 每对头部右侧：取消修整/隐藏文字区 与 视图切换 同组，用竖线分隔
+    '.rep-pairbtns button[data-raw].on,.rep-pairbtns button[data-hidetext].on{background:#fdf6ec;color:#7a4d12;border-color:#e3c98f}' +
+    '.rep-sep{width:1px;background:var(--border);margin:2px 6px;align-self:stretch}' +
+    '.rep-rawview{border:1px solid var(--border);border-top:0;background:var(--panel)}' +
+    '.rep-rawdiff{display:grid;grid-template-columns:1fr 1fr;gap:0}' +
+    '.rep-rawdiff .rep-col+.rep-col{border-left:1px solid var(--border)}' +
+    '.rep-rawview .rep-rawpre{padding:6px 10px}' +
+    '.rep-rawview pre{margin:0;padding:8px 10px;background:#fbfcfe;border:1px solid var(--border);' +
+    'border-radius:4px;font-family:var(--mono);font-size:12px;line-height:1.7;' +
+    'white-space:pre-wrap;word-break:break-all;max-height:480px;overflow:auto}' +
+    '.rep-rawview[hidden]{display:none}' +
+    '.rep-textarea[hidden]{display:none}' +
     '.rep-view[hidden]{display:none}' +
     '.rep-redline{border:1px solid var(--border);border-top:0;background:var(--panel);padding:6px 10px;' +
     'font-family:var(--mono);font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-all}' +
@@ -307,18 +324,47 @@
     } else {
       L = R = RL = '<div class="rep-empty">无对比结果</div>';
     }
+    var raw = pair.rawText || null;
+    var rawRes = pair.rawResult || null;
+    var rawHtml = '';
+    if (raw) {
+      if (rawRes && rawRes.mode === 'grid') {
+        // 原始文本 diff（保留换行按行对比）：与 split 视图同构的带色网格 + 协同滚动
+        var rb = gridBodies(rawRes);
+        rawHtml = '<div class="rep-rawview" hidden><div class="rep-rawdiff">' +
+          '<div class="rep-col"><div class="rep-colhead">原文（修整前）</div>' +
+          '<div class="rep-grid rep-sync" data-side="L">' + rb.left + '</div></div>' +
+          '<div class="rep-col"><div class="rep-colhead">修改后（修整前）</div>' +
+          '<div class="rep-grid rep-sync" data-side="R">' + rb.right + '</div></div>' +
+          '</div></div>';
+      } else {
+        // 无 diff 数据回退纯文本
+        rawHtml = '<div class="rep-rawview" hidden><div class="rep-rawpre">' +
+          '<div class="rep-colhead">原文（修整前）</div><pre>' + escHtml(raw.L || '') + '</pre>' +
+          '<div class="rep-colhead">修改后（修整前）</div><pre>' + escHtml(raw.R || '') + '</pre>' +
+          '</div></div>';
+      }
+    }
     return '<section class="rep-pair" id="pair-' + (idx + 1) + '">' +
       '<div class="rep-pairhead">' +
       '<span class="rep-pairname">' + escHtml(pair.leftName || '左') + ' ↔ ' + escHtml(pair.rightName || '右') + '</span>' +
       '<span class="rep-stats">' + statsHtml(res) + '</span>' +
-      '<span class="rep-viewsw"><button type="button" data-view="split" class="on">左右分栏</button>' +
-      '<button type="button" data-view="redline">Redline 合并</button></span></div>' +
+      '<span class="rep-pairbtns">' +
+      '<button type="button" data-raw="1" title="在 diff 高亮视图与修整前原始文本（保留空格/换行）间切换">取消修整</button>' +
+      '<button type="button" data-hidetext="1" title="隐藏/显示文字区（只看快照）">隐藏文字区</button>' +
+      '<span class="rep-sep"></span>' +
+      '<button type="button" data-view="split" class="on">左右分栏</button>' +
+      '<button type="button" data-view="redline">Redline 合并</button>' +
+      '</span></div>' +
+      '<div class="rep-textarea">' +
       '<div class="rep-view rep-view-split">' +
       '<div class="rep-diff">' +
-      '<div class="rep-col"><div class="rep-colhead">原文</div><div class="rep-grid" data-side="L">' + L + '</div></div>' +
-      '<div class="rep-col"><div class="rep-colhead">修改后</div><div class="rep-grid" data-side="R">' + R + '</div></div>' +
+      '<div class="rep-col"><div class="rep-colhead">原文</div><div class="rep-grid rep-sync" data-side="L">' + L + '</div></div>' +
+      '<div class="rep-col"><div class="rep-colhead">修改后</div><div class="rep-grid rep-sync" data-side="R">' + R + '</div></div>' +
       '</div></div>' +
       '<div class="rep-view rep-view-redline" hidden><div class="rep-redline">' + RL + '</div></div>' +
+      '</div>' +
+      rawHtml +
       '<div class="rep-shots"><h2>原始文件快照（含差异标注）</h2><div class="rep-shotcols">' +
       '<div class="rep-shotcol"><div class="rep-colhead">原文</div>' + shotsHtml((pair.shots && pair.shots.L) || []) + '</div>' +
       '<div class="rep-shotcol"><div class="rep-colhead">修改后</div>' + shotsHtml((pair.shots && pair.shots.R) || []) + '</div>' +
@@ -331,14 +377,40 @@
     // 双视图切换：数据同源只是渲染不同，切换一对时全部对一起切，并用 localStorage 记住上次选择
     'function apply(view){' +
     'document.querySelectorAll(".rep-pair").forEach(function(sec){' +
+    // 视图切换时若处于"取消修整"态，先回到 diff 视图再切（避免 raw 覆盖新视图）
+    'var rb0=sec.querySelector("[data-raw]"),rv0=sec.querySelector(".rep-rawview"),ta0=sec.querySelector(".rep-textarea");' +
+    'if(rb0&&rb0.classList.contains("on")){rb0.classList.remove("on");rb0.textContent="取消修整";' +
+    'if(rv0)rv0.hidden=true;if(ta0)ta0.hidden=false;}' +
     'sec.querySelectorAll(".rep-view").forEach(function(v){v.hidden=!v.classList.contains("rep-view-"+view);});' +
-    'sec.querySelectorAll(".rep-viewsw button").forEach(function(b){' +
+    'sec.querySelectorAll(".rep-pairbtns button[data-view]").forEach(function(b){' +
     'b.classList.toggle("on",b.getAttribute("data-view")===view);});});}' +
     'var saved=null;try{saved=window.localStorage.getItem("repView");}catch(e){}' +
     'apply(saved==="redline"?"redline":"split");' +
-    'document.querySelectorAll(".rep-viewsw button").forEach(function(b){' +
+    'document.querySelectorAll(".rep-pairbtns button[data-view]").forEach(function(b){' +
     'b.onclick=function(){var v=b.getAttribute("data-view");apply(v);' +
     'try{window.localStorage.setItem("repView",v);}catch(e){}};});' +
+    // 修正/取消修整（每对独立）：切换 diff 视图 ↔ 原始文本（保留空格换行）
+    'document.querySelectorAll(".rep-pair").forEach(function(sec){' +
+    'var rv=sec.querySelector(".rep-rawview"),ta=sec.querySelector(".rep-textarea"),rb=sec.querySelector("[data-raw]");' +
+    'if(rb){rb.onclick=function(){if(!rv){alert("该报告未包含修整前原始文本");return;}' +
+    'var raw=rb.classList.toggle("on");' +
+    'rv.hidden=!raw;if(ta)ta.hidden=raw;' +
+    'rb.textContent=raw?"修整":"取消修整";' +
+    'rb.title=raw?"恢复 diff 高亮视图（修整后文本）":"显示修整前原始文本（保留空格与换行）";};}' +
+    // 隐藏/显示文字区（每对独立）：只看快照
+    'var hb=sec.querySelector("[data-hidetext]");' +
+    'if(hb){hb.onclick=function(){var hid=hb.classList.toggle("on");' +
+    'if(ta)ta.hidden=hid;if(rv)rv.hidden=true;if(rb)rb.classList.remove("on");if(rb)rb.textContent="取消修整";' +
+    'hb.textContent=hid?"显示文字区":"隐藏文字区";};}' +
+    '});' +
+    // 左右协同滚动：每对每个双栏容器（split diff / 原始 diff）内两个 .rep-sync 同步 scrollTop
+    'document.querySelectorAll(".rep-diff,.rep-rawdiff").forEach(function(d){' +
+    'var cs=d.querySelectorAll(".rep-sync");if(cs.length!==2)return;' +
+    'var a=cs[0],b=cs[1],lock=false;' +
+    'function sync(src,dst){if(lock)return;lock=true;dst.scrollTop=src.scrollTop;lock=false;}' +
+    'a.addEventListener("scroll",function(){sync(a,b);});' +
+    'b.addEventListener("scroll",function(){sync(b,a);});' +
+    '});' +
     // 快照点击放大/还原
     'document.querySelectorAll(".rep-shot img").forEach(function(im){' +
     'im.onclick=function(){im.classList.toggle("zoomed");};});' +

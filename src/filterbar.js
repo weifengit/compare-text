@@ -48,10 +48,8 @@
       var items = files.map(function (f) { return { value: dirPath + '/' + f.name, label: f.name }; });
       fillSel(els.fileL, items);
       fillSel(els.fileR, items);
-      // 默认成对填充：原始=第一个文件，修改=第二个文件（不足则都取第一个）
-      if (items.length && !els.fileL.value) els.fileL.value = items[0].value;
-      if (items.length && !els.fileR.value) els.fileR.value = (items[1] || items[0]).value;
-      else if (items.length > 1 && els.fileR.value === els.fileL.value) els.fileR.value = items[1].value;
+      // 不自动填充前两个文件：默认文件可能很大，自动选中并加载会造成明显卡顿；
+      // 保持两侧留空，由用户手动从下拉选择后再触发加载。
     }).catch(function () { files = []; });
   }
 

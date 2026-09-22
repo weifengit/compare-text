@@ -134,6 +134,18 @@ fn api_read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| e.to_string())
 }
 
+/// 写文本文件（UTF-8）：导出报告用。父目录不存在时自动创建。
+#[tauri::command]
+fn api_write_file(path: String, content: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{}", e))?;
+        }
+    }
+    std::fs::write(p, content.as_bytes()).map_err(|e| format!("写入失败：{}", e))
+}
+
 /// 用系统默认浏览器打开外部链接（"请作者喝茶"等 target="_blank" 外链；WebView 不自动处理）。
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
@@ -147,6 +159,7 @@ pub fn run() {
             api_list,
             api_browse,
             api_read_file,
+            api_write_file,
             open_url
         ])
         .run(tauri::generate_context!())

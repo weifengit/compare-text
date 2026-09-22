@@ -520,6 +520,14 @@ async function snapSide(side, pid, sel, label, directPdf) {
 }
 
 // ---------- 单对处理 ----------
+/** 把 M（{optIgnoreCase:0|1,…}）转成 Compute 的 options；原始文本视图强制按行对比（ignoreNewline=false） */
+function rawOptions(M) {
+  var map = { optIgnoreCase: 'ignoreCase', optIgnoreEol: 'ignoreEol', optIgnoreWhitespace: 'ignoreWhitespace',
+    optIgnoreWidth: 'ignoreWidth', optIgnorePunct: 'ignorePunct' };
+  var o = { ignoreNewline: false };
+  for (var id in map) o[map[id]] = !!M[id];
+  return o;
+}
 /** 页面内驱动：加载两侧 → 比较 → 取结果 → 逐页快照。返回 {leftName,rightName,result,shots} */
 async function renderPair(pair, opts, idx) {
   var left = path.resolve(pair.left), right = path.resolve(pair.right);
@@ -600,7 +608,14 @@ async function renderPair(pair, opts, idx) {
     function (v) { return v === true; }, 60, '编辑器文本就绪');
   await evaluate('(function(){var eds=document.querySelectorAll(".CodeMirror");' +
     'var L=eds[0].CodeMirror,R=eds[1].CodeMirror;' +
-    'L.setValue(Norm.tidyText(L.getValue()));R.setValue(Norm.tidyText(R.getValue()));return 1;})()');
+    'var rL=L.getValue(),rR=R.getValue();' +
+    'window.__reportRawText__={L:rL,R:rR};' +      // 修整前原文（供报告"取消修整"）
+    // 原始文本 diff：保留换行按行对比（ignoreNewline:false → grid 模式），其余选项与任务一致，
+    // 供报告的"取消修整"视图显示带颜色标注 + 行号的原始文本 diff
+    'var ro=' + JSON.stringify(rawOptions(M)) + ';' +
+    'window.__reportRawDiff__=(typeof Compute!=="undefined"&&Compute.computeDiff)?' +
+    'Compute.computeDiff({left:rL,right:rR,options:ro}):null;' +
+    'L.setValue(Norm.tidyText(rL));R.setValue(Norm.tidyText(rR));return 1;})()');
 
   // 显式再算一次（上面自动对比已按同样选项跑过，这里保证拿到确定的最新结果）
   await evaluate('Pipeline.compare()');
@@ -642,7 +657,12 @@ async function renderPair(pair, opts, idx) {
   if (kinds.R === 'docx') shots.R = await snapSide('R', 'pdfRight', '.docx-wrapper section.docx', 'R(docx)', false);
   else if (kinds.R === 'pdf') shots.R = await snapSide('R', 'pdfRight', '.pdf-page', 'R(pdf)', true);
 
-  return { leftName: path.basename(left), rightName: path.basename(right), result: result, shots: shots };
+  // 修整前原文（供报告"取消修整"按钮切换显示；无则 null）
+  var rawText = await evalJson('JSON.stringify(window.__reportRawText__||null)');
+  // 原始文本的 grid diff（保留换行，带颜色标注+行号）；Compute 不可用时为 null
+  var rawDiff = await evalJson('JSON.stringify(window.__reportRawDiff__||null)');
+  return { leftName: path.basename(left), rightName: path.basename(right), result: result, shots: shots,
+    rawText: rawText, rawResult: rawDiff };
 }
 
 function addStats(stats, result) {

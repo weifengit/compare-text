@@ -436,6 +436,114 @@
     Pipeline.compare();
   });
 
+  // ---------- 导出报告 ----------
+  // 复用批量报告同款渲染（src/report.js 的 Report.build）+ 同款逐页光栅化（PdfView.rasterizePage），
+  // 在 UI 内把当前对比结果导出自包含 HTML 报告（差异标注 + 逐页快照，双击即看）。
+  var exportReportBtn = $('exportReportBtn');
+  /** 最近一次采集的两侧快照（导出报告复用，避免重复采集） */
+  var lastShots = { L: [], R: [] };
+  function defaultReportName() {
+    function base(p) { var n = String(p || '').split('/').pop(); return (n || '').replace(/\.[^.]+$/, ''); }
+    var lb = FilterBar.getSelected ? base(FilterBar.getSelected('L')) : '';
+    var rb = FilterBar.getSelected ? base(FilterBar.getSelected('R')) : '';
+    var ts = new Date();
+    function p2(x) { return x < 10 ? '0' + x : '' + x; }
+    var stamp = ts.getFullYear() + p2(ts.getMonth() + 1) + p2(ts.getDate()) + '-' +
+      p2(ts.getHours()) + p2(ts.getMinutes()) + p2(ts.getSeconds());
+    if (lb && rb && lb !== rb) return lb + '-' + rb + '-' + stamp + '.html';
+    return '对比报告-' + stamp + '.html';
+  }
+  /** 采集单侧逐页快照（PDF 直接光栅化；docx/纯文本无快照 → 空数组，报告显示"无快照"） */
+  function captureShots(side) {
+    var n = (PdfView.getNumPages && PdfView.getNumPages(side)) || 0;
+    if (!n) return Promise.resolve([]);
+    var out = [];
+    var chain = Promise.resolve();
+    for (var p = 1; p <= n; p++) {
+      (function (pageNum) {
+        chain = chain.then(function () {
+          if (!PdfView.isPageRendered || !PdfView.isPageRendered(side, pageNum)) {
+            return PdfView.rasterizePage(side, pageNum, 1, false);
+          }
+          return PdfView.rasterizePage(side, pageNum, 1, false);
+        }).then(function (r) { if (r && r.data) out.push({ data: r.data, w: r.w, h: r.h }); });
+      })(p);
+    }
+    return chain.then(function () { return out; });
+  }
+  /** 组装报告 HTML（快照 + 原始文本 diff 已就绪，同步调用） */
+  function buildReportHtml(r, pL, pR) {
+    function base(p) { var n = String(p || '').split('/').pop(); return n || '左侧'; }
+    var rawL = tidyBefore ? tidyBefore.left : editorL.getValue();
+    var rawR = tidyBefore ? tidyBefore.right : editorR.getValue();
+    var rawResult = null;
+    try {
+      if (typeof Compute !== 'undefined' && Compute.computeDiff) {
+        var ro = readOptions(); ro.ignoreNewline = false;
+        rawResult = Compute.computeDiff({ left: rawL, right: rawR, options: ro });
+      }
+    } catch (e) { rawResult = null; }
+    var pair = {
+      leftName: base(pL), rightName: base(pR),
+      result: r,
+      shots: { L: lastShots.L, R: lastShots.R },
+      // 修整前原文（供报告"取消修整"按钮）：修整过用修整前快照，否则用当前编辑器文本
+      rawText: { L: rawL, R: rawR },
+      rawResult: rawResult
+    };
+    return Report.build({
+      title: defaultReportName().replace(/\.html$/, ''),
+      time: new Date().toLocaleString('zh-CN'),
+      pairs: [pair]
+    });
+  }
+
+  function exportReport() {
+    var r = Pipeline.getResult ? Pipeline.getResult() : null;
+    if (!r || r.error) { toast('没有可导出的对比结果', true); return; }
+    if (typeof Report === 'undefined' || !Report.build) { toast('报告模块未加载（report.js 缺失）', true); return; }
+    if (!Source || !Source.writeFile) { toast('写文件不可用', true); return; }
+    var pL = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
+    var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
+    var name = defaultReportName();
+    if (Source.isTauri) {
+      // 桌面版：Picker 选目录（绝对路径）→ 生成 → 写入
+      if (!Picker || !Picker.open) { toast('保存位置选择不可用', true); return; }
+      Picker.open(function (dir) {
+        if (!dir) return;                                  // 用户取消
+        var full = dir.replace(/\/+$/, '') + '/' + name;
+        toast('正在生成报告…');
+        Promise.all([captureShots('L'), captureShots('R')]).then(function (sh) {
+          lastShots = { L: sh[0], R: sh[1] };
+          var html = buildReportHtml(r, pL, pR);
+          return Source.writeFile(full, html);
+        }).then(function () {
+          toast('报告已导出：' + full);
+        }).catch(function (e) {
+          toast('导出失败：' + ((e && e.message) || e), true);
+        });
+      });
+      return;
+    }
+    // 浏览器版：先弹系统"另存为"捕获用户手势（报告生成耗时可观，手势会过期），再生成、再写入
+    toast('请选择报告保存位置…');
+    Source.saveAsHandle(name).then(function (handle) {
+      if (!handle) { toast('当前浏览器不支持选择保存位置，将改为直接下载', true); }
+      toast('正在生成报告…');
+      return Promise.all([captureShots('L'), captureShots('R')]).then(function (sh) {
+        lastShots = { L: sh[0], R: sh[1] };
+        var html = buildReportHtml(r, pL, pR);
+        if (handle) return Source.writeHandle(handle, html);
+        return Source.writeFile(name, html);   // 回退：浏览器下载
+      });
+    }).then(function (savedName) {
+      toast('报告已导出：' + (savedName || name));
+    }).catch(function (e) {
+      toast('导出失败：' + ((e && e.message) || e), true);
+    });
+  }
+  if (exportReportBtn) exportReportBtn.addEventListener('click', exportReport);
+
   // ---------- 编辑区高度可调 ----------
   var EDITORS_KEY = 'diffchecker_editors_h';
   var edResizeState = null;

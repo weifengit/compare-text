@@ -303,7 +303,10 @@
 
   // ---------- rec 后处理（CTC） ----------
 
-  /** CTC 解码：argmax 序列去重（相邻相同合并）+ 去 blank(0) */
+  /** CTC 解码：argmax 序列去重（相邻相同合并）+ 去 blank(0)。
+   *  空格恢复：PP-OCRv4 模型字符表比本仓库字典多 1 个类（末尾空格类，argmax 越界时
+   *  dict[argmax] 为 undefined）；模型把「文字间空格」识别成该类时若兜底 '?' 会污染全文。
+   *  故：越界 → 空格；字典内半角 '?'（多为空格误判，中文文档真问号用全角 '？'）→ 空格。 */
   function ctcDecode(probs, dict) {
     var T = probs.length;
     var text = '';
@@ -317,7 +320,10 @@
         if (row[c] > maxp) { maxp = row[c]; argmax = c; }
       }
       if (argmax !== last && argmax !== 0) {
-        text += dict[argmax] || '?';
+        var ch = dict[argmax];
+        if (ch == null) ch = ' ';          // 越界（模型空格类）→ 恢复空格
+        else if (ch === '?') ch = ' ';     // 半角问号 = 空格误识别 → 恢复空格
+        text += ch;
         confSum += maxp; confN++;
       }
       last = argmax;
