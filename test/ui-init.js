@@ -333,6 +333,13 @@ check('文件夹选择：输入路径点击“加载”进入浏览不报错', f
   if (!els['pickerErr'].classList.contains('hidden')) throw new Error('加载后不应报错');
   els['pickCancelBtn'].dispatch('click');           // 关闭，避免影响后续用例
 });
+check('文件夹选择：点击背景遮罩不再误关闭弹层（保留正在配置的进度）', function () {
+  els['srcPathInput'].dispatch('click');            // 打开弹层
+  if (els['pickerMask'].hidden !== false) throw new Error('应已打开弹层');
+  els['pickerMask'].dispatch('click', { target: els['pickerMask'] });   // 模拟点到背景遮罩
+  if (els['pickerMask'].hidden !== false) throw new Error('点击背景不应关闭弹层');
+  els['pickCancelBtn'].dispatch('click');           // 用面板自身按钮正常关闭
+});
 check('隐藏/显示编辑区按钮切换', function () {
   els['toggleEditorsBtn'].dispatch('click');
   if (!els['editors'].classList.contains('hidden')) throw new Error('点击后编辑区应隐藏');

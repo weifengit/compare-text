@@ -109,13 +109,17 @@
   }
 
   function open() {
-    cur = null;
-    els.path.value = '';
+    var src = String((cfg.input && cfg.input.value) || '').trim();
+    // 未完成浏览时保留现场：来源路径没变就接着上次位置浏览（避免误关/关闭后重头再来）；变了才从新路径开始
+    if (!cur || !cur.path || cur.path !== src) {
+      cur = null;
+      els.path.value = '';
+    }
     setErr('');
     render();
     els.mask.hidden = false;                    // markup 用 hidden 属性控制显示，须移除属性
     els.mask.classList.remove('hidden');        // 兜底清理可能残留的 hidden class
-    navigate(String((cfg.input && cfg.input.value) || '').trim());
+    navigate(src);
     if (els.path && els.path.focus) els.path.focus();
   }
 
@@ -152,9 +156,14 @@
     els.path.addEventListener('keydown', function (ev) {
       if (ev.key === 'Enter') { ev.preventDefault(); onGo(); }   // 与"加载"按钮一致：进入该路径浏览
     });
-    els.mask.addEventListener('click', function (ev) { if (ev.target === els.mask) close(); });
+    // 注意：不监听背景点击关闭——弹层居中小、四周是大块暗色背景，误点一下就丢掉正在配置的进度。
+    // 关闭只通过面板自身按钮（× / 取消 / 选择此文件夹）或 Esc 完成。
     document.addEventListener('keydown', function (ev) {
-      if (ev.key === 'Escape' && !els.mask.hidden) close();
+      if (ev.key !== 'Escape' || els.mask.hidden) return;
+      // 正在输入路径时 Esc 只取消输入焦点，避免误按把整个面板关掉
+      var ae = root.document && root.document.activeElement;
+      if (ae && ae === els.path) { if (ae.blur) ae.blur(); return; }
+      close();
     });
     var bind = function (id, fn) { var b = $(id); if (b) b.addEventListener('click', fn); };
     bind('pickerGo', onGo);          // “加载”按钮：浏览输入框中的路径
