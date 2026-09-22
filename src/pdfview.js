@@ -830,6 +830,13 @@
     extractText: extractText, extractPanel: extractPanel, getPanelText: getPanelText, segmentFields: segmentFields,
     setHighlight: setHighlight, getHighlight: getHighlight, isLoaded: isLoaded, isPageRendered: isPageRendered,
     getNumPages: getNumPages, setOcrResult: setOcrResult, renderPageToImage: renderPageToImage,
+    getPageViewport: function (side, pageNum, scale) {
+      var pdf = docs[side];
+      if (!pdf) return null;
+      return pdf.getPage(pageNum).then(function (page) {
+        return page ? page.getViewport({ scale: scale || 1 }) : null;
+      }, function () { return null; });
+    },
     rasterizePage: rasterizePage,
     lineOffset: lineOffset, lineAtOffset: lineAtOffset, lineHeight: lineHeightAtLine,
     nextLineOffset: nextLineOffset

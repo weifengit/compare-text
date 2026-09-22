@@ -59,7 +59,13 @@
   var DET_UNCLIP_RATIO = 1.6;
   var DET_MIN_BOX_PX = 3;
   // rec 参数
+  // PP-OCRv4 rec 是动态宽度输入（高固定 48，宽可变，输出时间步 T = 宽/8）。
+  // 官方默认把行图缩到 320px 宽（约 40 字上限）；中文文档「全宽长行」（一页 ~35-40 字）压到
+  // 320px 后每字仅 ~8px，低于可读阈值 → 系统性误识（实测 320px 下「鉴别/制法」段几乎全错，
+  // 640-768px 下同批长行 conf 0.97-0.99 全对）。故按行图原始宽高比自适应，封顶 REC_MAX_W。
   var REC_IMG_SHAPE = [3, 48, 320];
+  var REC_MAX_W = 768;             // 长行输入宽度上限（768px ≈ 96 字容量，640 亦可用；1024 轻微过放大）
+  var REC_MIN_W = 48;
   // cls 参数
   var CLS_IMG_SHAPE = [3, 48, 192];
   var CLS_THRESH = 0.9;
@@ -275,11 +281,15 @@
       if (ww < DET_MIN_BOX_PX || hh < DET_MIN_BOX_PX) continue;
       var avg = ccp.sum / ccp.n;
       if (avg < DET_BOX_THRESH) continue;
-      // unclip：按矩形外扩（矩形近似）
-      var ex = Math.max(1, ww * 0.02 * DET_UNCLIP_RATIO);
-      var ey = Math.max(1, hh * 0.02 * DET_UNCLIP_RATIO);
-      var x0 = Math.max(0, ccp.minX - ex), y0 = Math.max(0, ccp.minY - ey);
-      var x1 = Math.min(w - 1, ccp.maxX + ex), y1 = Math.min(h - 1, ccp.maxY + ey);
+      // unclip：PaddleOCR DB 后处理同款公式 —— 对多边形按 offset = unclip_ratio * 2 * area / perimeter
+      // 外扩（pyclipper 偏移语义）。对「长文本行」≈ offset ≈ unclip_ratio * 行高，能把 det 只激发的
+      // 文字中段带扩展为完整行高（否则裁剪块只有 ~1/3 行高，rec 拉伸后字形纵向截断 → 系统性误识）。
+      // 旧的矩形近似（ex=ww*0.02*ratio, ey=hh*0.02*ratio，仅 ~3.2% 外扩）对行框严重不足。
+      var area = ww * hh, peri = 2 * (ww + hh);
+      var offset = DET_UNCLIP_RATIO * 2 * area / (peri || 1);
+      if (!isFinite(offset) || offset < 1) offset = 1;
+      var x0 = Math.max(0, ccp.minX - offset), y0 = Math.max(0, ccp.minY - offset);
+      var x1 = Math.min(w - 1, ccp.maxX + offset), y1 = Math.min(h - 1, ccp.maxY + offset);
       var quad = [
         { x: x0 * ratioW, y: y0 * ratioH },
         { x: x1 * ratioW, y: y0 * ratioH },
@@ -498,26 +508,25 @@
   }
 
   function runRec(ort, recS, rgb, dict) {
-    var H = REC_IMG_SHAPE[1], W = REC_IMG_SHAPE[2];
+    var H = REC_IMG_SHAPE[1], W0 = REC_IMG_SHAPE[2];
     var w = rgb.w, h = rgb.h;
-    var maxWhRatio = W / H;
     var u = H / h;
-    var l = Math.max(8, Math.round(w * u));
-    l = Math.min(l, Math.round(H * maxWhRatio));
-    l = Math.min(l, W);
+    // 按原始行图宽高比自适应宽度：长行不压扁到 320（否则每字 <10px 无法识别），封顶 REC_MAX_W
+    var l = Math.max(REC_MIN_W, Math.round(w * u));
+    l = Math.min(l, REC_MAX_W);
     var resized = resizeRgb(rgb, l, H);
     var mean = 0.5, std = 0.5;
-    var input = new Float32Array(1 * 3 * H * W);
+    var input = new Float32Array(1 * 3 * H * l);
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < l; x++) {
         var si = (y * l + x) * 3;
-        var di = y * W + x;
+        var di = y * l + x;
         input[di] = (resized.data[si] / 255 - mean) / std;
-        input[H * W + di] = (resized.data[si + 1] / 255 - mean) / std;
-        input[2 * H * W + di] = (resized.data[si + 2] / 255 - mean) / std;
+        input[H * l + di] = (resized.data[si + 1] / 255 - mean) / std;
+        input[2 * H * l + di] = (resized.data[si + 2] / 255 - mean) / std;
       }
     }
-    return recS.run({ [recS.inputNames[0]]: new ort.Tensor('float32', input, [1, 3, H, W]) }).then(function (out) {
+    return recS.run({ [recS.inputNames[0]]: new ort.Tensor('float32', input, [1, 3, H, l]) }).then(function (out) {
       var outName = recS.outputNames[0];
       var dims = out[outName].dims;
       var T = dims[1], C = dims[2];
@@ -609,9 +618,11 @@
         var sorted = sortReadingOrder(rawLines);
         var kept = sorted.filter(function (l) { return l.conf >= CONF_KEEP && l.text !== ''; });
         var text = kept.map(function (l) { return l.text; }).join('\n');
+        // lines 只报告有文本的行（空行/纯噪声框不产生文本项，避免下游空框干扰）
+        var withText = sorted.filter(function (l) { return l.text !== ''; });
         return {
           text: text,
-          lines: sorted.map(function (l) {
+          lines: withText.map(function (l) {
             return {
               text: l.text,
               box: l.box,
@@ -690,6 +701,13 @@
       labelConnected: labelConnected,
       minAreaRect: minAreaRect,
       boxesFromProb: boxesFromProb
+    },
+    _dbg: {
+      getRuntime: requireRuntime,
+      runDet: runDet,
+      runCls: runCls,
+      runRec: runRec,
+      detParams: function () { return { limitSide: DET_LIMIT_SIDE, limitType: DET_LIMIT_TYPE, thresh: DET_THRESH, boxThresh: DET_BOX_THRESH, unclip: DET_UNCLIP_RATIO }; }
     }
   };
 });

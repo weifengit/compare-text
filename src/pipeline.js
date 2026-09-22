@@ -621,8 +621,14 @@
   }
 
   // ---------- 扫描版 OCR ----------
-  /** OCR 渲染缩放：页面单位→像素。2x 对 A4 约 1190×1684px，det 长边限制内，识别质量与耗时均衡。 */
+  /**
+   * OCR 渲染缩放（页面 pt → 像素，1pt = 1/72in，故 scale = DPI/72）。
+   * 2x 仅 ~144 DPI：会把 300 DPI 扫描件降采样一半，小字号正文被压缩到 ~20px 高，
+   * det 热力带断裂 + rec 拉伸失真 → 系统性误识。4x ≈ 288 DPI，接近扫描原生分辨率，
+   * 正文约 40px 高，识别质量显著提升。长边封顶防超大页面爆内存。
+   */
   var OCR_SCALE = 2;
+  var OCR_MAX_SIDE = 4000;
   /** 每页 OCR 前重置该侧 pending 标记 */
   var ocrRunToken = { L: 0, R: 0 };
 
@@ -688,7 +694,17 @@
           chain = chain.then(function () {
             if (my !== ocrSeq) return Promise.reject(new Error('cancelled'));
             if (cfg.onOcrProgress) cfg.onOcrProgress(side, { phase: 'page', page: pageNum, total: total });
-            return PdfView.renderPageToImage(side, pageNum, OCR_SCALE);
+            // 渲染 scale：OCR 对扫描件的正文行识别已由「rec 动态宽度」解决（见 ocr.js），
+            // 渲染分辨率不再影响质量（scale2 实测 4gram 87.7% ≥ scale4 的 84.4%，且更快更省内存）。
+            // 长边封顶仅防超大页面（A3/图纸）爆内存。
+            var effScale = OCR_SCALE;
+            return (PdfView.getPageViewport ? PdfView.getPageViewport(side, pageNum, 1) : Promise.resolve(null)).then(function (vp1) {
+              if (vp1) {
+                var longSide = Math.max(vp1.width, vp1.height) * OCR_SCALE;
+                if (longSide > OCR_MAX_SIDE) effScale = Math.max(2, OCR_MAX_SIDE / Math.max(vp1.width, vp1.height));
+              }
+              return PdfView.renderPageToImage(side, pageNum, effScale);
+            });
           }).then(function (img) {
             if (!img) return null;          // 单页渲染失败：跳过该页
             return new Promise(function (resolvePage, rejectPage) {

@@ -107,6 +107,16 @@
    - 识别结果含**行级坐标**（det 文本框）→ 经 `linesToTextItems` 转成与 pdf.js `collectItems` **同构**的 textItems（`{transform,width,line,col,str,hasEOL}`）
    - 差异标注直接画在扫描页上（复用 `computeHlBoxes` 坐标映射，零改动），**不需要**生成文字版 PDF
    - Worker 封装 `src/ocr-worker.js`（classic Worker，`importScripts` 加载 ort + ocr.js；图片用 transferable 传输；`wasmPaths` 显式给绝对 URL 解决 classic Worker 动态 import 相对路径解析问题）
+   - **rec 动态宽度（关键正确性修复）**：SWHL 导出的 rec onnx 实为**动态宽度**输入（高 48 固定，宽可变，输出时间步 T=宽/8），
+     官方默认按 320px 宽封顶。中文标准文档的「全宽长行」（一页 ~35-40 字）压到 320px 后每字仅 ~8px，
+     低于可读阈值 → 正文段落（鉴别/制法/含量测定等）系统性误识（实测 4gram 保留率仅 ~30%）。
+     `runRec` 已改为按行图原始宽高比自适应宽度、封顶 768px（≈96 字容量）：同批长行 conf 0.97-0.99 全对，
+     上海扫描件 4gram 保留率 30%→88%、单字保留率 99%（对照吉林文字版）。
+   - **det unclip 用 PaddleOCR 同款公式**：`offset = unclip_ratio * 2 * area / perimeter`（对长文本行 ≈ 1.6×行高），
+     替代旧矩形近似（仅 ~3.2% 外扩）——旧公式导致裁剪块只有 ~1/3 行高，字形纵向截断 → 系统性误识。
+   - `recognize()` 的 `lines` 只报告**有文本的行**（空行/纯噪声框不输出，避免下游空框干扰）。
+   - 渲染 scale=2（≈144DPI）即足够：rec 输入高度固定 48px，分辨率不改变行识别质量；
+     scale4（288DPI）实测 4gram 略降（84% vs 88%）且更慢更占内存，故默认保持 2。
 3. **与对比流程的集成（src/pipeline.js + src/pdfview.js）**
 
    - `pipeline.js` 检测扫描件 → `onScannedPdf(side)` 回调 → `runOcr(side)` 逐页识别（`PdfView.renderPageToImage` 离屏渲染 → worker 推理 → 累积 text + items），`setOcrResult` 注入面板，`onPanelText` 进编辑区
