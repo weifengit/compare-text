@@ -656,30 +656,36 @@
     pageNum = pageNum || 1;
     startLine = startLine || 0;
     var inv = 1 / pageScale;
+    var imgH = pageH * pageScale;            // OCR 输入图高度（像素）
     var boxes = [];
     var line = startLine;
     for (var i = 0; i < lines.length; i++) {
       var l = lines[i];
       if (!l || l.lowConf || l.text === '') continue;   // 低置信行不参与标注坐标
       var q = l.box;
-      // 输入图坐标 → 页面单位
+      // 输入图坐标（y 向下，原点左上）→ PDF 页面单位（y 向上，原点左下）：
+      //   x 同向直接缩放；y 必须翻转（imgH - y），否则整页标注上下镜像错位
+      //   （实测：不翻转时页顶标题的标注框跑到页底，且每行整体上移一个字身高）。
       var x0 = Math.min(q[0].x, q[3].x) * inv;
       var x1 = Math.max(q[1].x, q[2].x) * inv;
-      var y0 = Math.min(q[0].y, q[1].y) * inv;
-      var y1 = Math.max(q[2].y, q[3].y) * inv;
+      var yTop = (imgH - Math.min(q[0].y, q[1].y)) * inv;   // 行顶（页面 y-up 的较大侧）
+      var yBot = (imgH - Math.max(q[2].y, q[3].y)) * inv;   // 行底（页面 y-up 的较小侧）
       var bw = Math.max(0, x1 - x0);
-      var bh = Math.max(0, y1 - y0);
+      var bh = Math.max(0, yTop - yBot);
       var fontH = bh > 0 ? bh : 12;
-      // pdf.js 文本矩阵：transform=[a,b,c,d,e,f]，e/f=基线原点，字身高=sqrt(c²+d²)
-      // 合成：a=fontH(横向字宽近似), d=fontH, e=x0, f=y0+fontH（基线≈框顶+字身）
+      // pdf.js 文本矩阵：transform=[a,b,c,d,e,f]，e/f=基线原点，字身高=sqrt(c²+d²)。
+      // f=行底（yBot）：computeHlBoxes 按「top=基线-字身、高=字身×1.35」算标注框，
+      // 得到 [yBot-0.35h, yTop+0.35h] ≈ 覆盖 OCR 行框（下缘略留字脚余量）。
+      // 基线若取行顶（yTop），整框会再上移一个字身高 → 标注与文字错开一行。
       line++;
       boxes.push({
-        transform: [fontH, 0, 0, fontH, x0, y0 + fontH],
+        transform: [fontH, 0, 0, fontH, x0, yBot],
         width: bw,
         line: line,
         col: 0,
         str: l.text,
-        hasEOL: true
+        hasEOL: true,
+        ocr: true          // 标记：OCR 项 transform 的 e/f = 行框底（非基线），computeHlBoxes 按行框几何算对称标注
       });
     }
     return [{ page: pageNum, boxes: boxes }];

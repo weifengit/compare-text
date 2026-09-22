@@ -395,7 +395,11 @@
    * 返回 [{cls, x, y, w, h}]，cls ∈ 'rm'|'ad'|'ch'。hl 值两种形态：
    *   'rm'|'ad'           → 整行（该文本项）涂色；
    *   { t:'ch', segs }    → 只涂 segs 中非 eq 的字符区间（与区域1 行内高亮同源）。
-   * 垂直方向：框顶=基线-字身高度，框高=字身×1.35，覆盖上伸/下伸笔画。
+   * 垂直方向：以文字行/字形视觉中线为基准上下对称，高度贴近字身——
+   *   - OCR 项（b.ocr）：transform 的 e/f = 行框底，行框 = [f-fontH, f]（det ink 包围盒，
+   *     unclip 后略大于字形）；标注高 = 行框 × 0.81、中心 = 行框中心 → 上下对称、不拖长条；
+   *   - 真实 PDF 项：transform 的 e/f = 基线，中文 ink ≈ [基线-0.9em, 基线-0.05em]，
+   *     视觉中线 ≈ 基线上方 0.465 字身；标注高 ≈ 1.0 字身 → 覆盖 ink、上下对称。
    */
   function computeHlBoxes(boxes, vp, hl) {
     var rects = [];
@@ -406,10 +410,21 @@
       if (!t) continue;
       var tm = mulMat(vp.transform, b.transform);
       var fontH = Math.max(1, Math.sqrt(tm[2] * tm[2] + tm[3] * tm[3]));
-      var top = tm[5] - fontH;                       // 文本矩阵原点在基线：自字身上沿盖起
-      var h = fontH * 1.35;                          // 下沿探到基线之下，覆盖 g/y/p 等下伸笔画
       var x0 = tm[4];
       var itemW = (b.width || 0) * vp.scale;
+      var center, h;
+      if (b.ocr) {
+        // OCR 项：行框底在 tm[5]，行框 = [tm[5]-fontH, tm[5]]（det ink 包围盒，unclip 略大于字形）
+        // 高度取行框 0.81（0.9 再缩 10%，更贴近字形），中心=行框中心 → 上下对称
+        h = fontH * 0.81;
+        center = tm[5] - fontH / 2;
+      } else {
+        // 真实 PDF 项：基线在 tm[5]，中文 ink ≈ [基线-0.9em, 基线-0.05em]，
+        // 视觉中线 ≈ 基线上方 0.465 字身；高度 = 1.12 字身再缩 10% ≈ 1.0 字身 → 覆盖 ink、上下对称
+        h = fontH * 1.0;
+        center = tm[5] - fontH * 0.465;
+      }
+      var top = center - h / 2;
       if (typeof t === 'string') {
         rects.push({ cls: t, x: x0, y: top, w: itemW, h: h });
         continue;
