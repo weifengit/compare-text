@@ -490,12 +490,14 @@
     fileSeq[side]++;
     if (ocrState[side] === 'running' || ocrState[side] === 'pending') setOcrState(side, 'idle');
     ocrSeq++;                        // 作废在途 OCR（runOcr 内部检查 my === ocrSeq）
+    ocrPathBySide[side] = null;      // 作废已登记的 OCR 路径（避免缓存写到旧文件）
   }
   /** 作废两侧在途加载（切换标签页 / 恢复会话）；同时取消全部在途 OCR */
   function invalidateAll() {
     fileSeq.L++; fileSeq.R++;
     ocrSeq++;                        // 作废在途 OCR
     ['L', 'R'].forEach(function (s) { if (ocrState[s] === 'running' || ocrState[s] === 'pending') setOcrState(s, 'idle'); });
+    ocrPathBySide.L = null; ocrPathBySide.R = null;
   }
   /** 取消在途 OCR（UI 取消按钮）。 */
   function cancelOcr() {
@@ -532,6 +534,12 @@
       if (stale()) return;
       if (/\.pdf$/i.test(absPath)) {
         if (typeof DocxView !== 'undefined' && DocxView.clear) DocxView.clear(side);  // 与 Word 面板互斥：同侧只保留一种渲染
+        // ★ 新 PDF 加载开始即把 OCR 状态重置为 pending：render.js 报告通道的 OCR 轮询
+        //   靠 ocrState 判断"扫描识别是否落定"，若沿用上一对的残留 done/idle 会在
+        //   extractPanel 判定前就通过 → textItems 尚未注入 → 扫描页差异标注缺失。
+        //   文字层 PDF：extractPanel 返回文本后下面会复位 idle（轮询见 idle 即通过）；
+        //   扫描版：保持 pending → 缓存命中/OCR 完成才置 done（轮询等 done 才通过）。
+        setOcrState(side, 'pending');
         // 单次取文档：渲染 + 提词复用同一份
         var load = PdfView.load(side, url, my);
         if (load && load.then) {
@@ -542,24 +550,42 @@
             if (stale()) return;
             if (!text || !text.trim()) {
               // 扫描版 PDF：无文字层（getTextContent 为空）→ 无法直接对比。
-              // 无头模式（__HEADLESS_OCR__=true，render.js 报告通道）自动跑 OCR 不弹窗；
-              // 交互模式交给 UI 层决定（弹确认框）；同时登记该侧为「待 OCR」状态。
+              // 优先复用 OCR 结果缓存（同一文件已识别过 → 直接注入，跳过 Worker 加载与逐页识别）；
+              // 未命中：无头模式（__HEADLESS_OCR__=true，render.js 报告通道）自动跑 OCR 不弹窗，
+              // 交互模式交给 UI 层决定（弹确认框）；识别完成后把结果写回缓存供下次复用。
               if (PdfView.getNumPages && PdfView.getNumPages(side) > 0) {
+                ocrPathBySide[side] = absPath;   // 登记路径：OCR 完成后写结果缓存（复用）
                 var headlessOcr = typeof window !== 'undefined' && window.__HEADLESS_OCR__;
-                if (headlessOcr) {
-                  setOcrState(side, 'pending');
-                  runOcr(side);           // 自动识别（不打断报告流程）
-                } else {
-                  ocrPendingSide = side;
-                  setOcrState(side, 'pending');
-                  if (cfg.onScannedPdf) cfg.onScannedPdf(side, absPath, url);
-                }
+                // 先同步登记 pending：无头报告通道的 OCR 轮询会等它落定（done/failed），
+                // 不会被编辑器里上一对的残留文本短路——保证 textItems 注入完成后再截图（标注不丢）。
+                setOcrState(side, 'pending');
+                ocrCacheGet(absPath).then(function (cached) {
+                  if (stale()) return;
+                  if (cached) {
+                    // 缓存命中：复用上次识别结果（text 进编辑器、items 供扫描页差异标注）
+                    PdfView.setOcrResult(side, { text: cached.text, items: cached.items });
+                    cfg.onPanelText(side, cached.text);
+                    setOcrState(side, 'done');
+                    if (cfg.onOcrProgress) cfg.onOcrProgress(side, { phase: 'done', pages: cached.items.length, cached: true });
+                    return;
+                  }
+                  if (headlessOcr) {
+                    runOcr(side);           // 自动识别（识别完成内部置 done + 写缓存）
+                  } else {
+                    ocrPendingSide = side;
+                    if (cfg.onScannedPdf) cfg.onScannedPdf(side, absPath, url);
+                  }
+                });
               }
               return;
             }
             cfg.onPanelText(side, text);
+            setOcrState(side, 'idle');       // 文字层 PDF：OCR 决策完成（非扫描）→ 复位，轮询见 idle 即通过
           }).catch(function (err) {
-            if (!stale()) cfg.toast('加载 PDF 失败：' + ((err && err.message) || err), true);
+            if (!stale()) {
+              setOcrState(side, 'idle');   // 加载失败：OCR 决策终止，复位避免轮询死等 pending
+              cfg.toast('加载 PDF 失败：' + ((err && err.message) || err), true);
+            }
           });
         }
       } else if (/\.docx$/i.test(absPath)) {
@@ -622,6 +648,35 @@
 
   // ---------- 扫描版 OCR ----------
   /**
+   * OCR 结果磁盘缓存（识别结果复用）：命中返回 {text, items}，未命中/不可用返回 null。
+   * 走 serve.js 的 /api/ocr-cache（服务端按 path+size+mtime 算键，文件变化自动失效）；
+   * Tauri/离线等无该 API 的环境静默回退（返回 null，走正常 OCR）。
+   */
+  function ocrCacheGet(absPath) {
+    if (typeof fetch !== 'function') return Promise.resolve(null);
+    return fetch('/api/ocr-cache?path=' + encodeURIComponent(absPath))
+      .then(function (r) {
+        return r.json().catch(function () { return null; });
+      })
+      .then(function (d) {
+        return (d && d.ok && d.hit && typeof d.text === 'string' && d.text && Array.isArray(d.items) && d.items.length)
+          ? { text: d.text, items: d.items } : null;
+      })
+      .catch(function () { return null; });
+  }
+  /** 把一次 OCR 结果写进磁盘缓存（失败静默，不影响主流程）。 */
+  function ocrCachePut(absPath, text, items) {
+    if (typeof fetch !== 'function') return;
+    try {
+      fetch('/api/ocr-cache', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: absPath, text: text, items: items })
+      }).catch(function () {});
+    } catch (e) { /* 忽略 */ }
+  }
+
+  /**
    * OCR 渲染缩放（页面 pt → 像素，1pt = 1/72in，故 scale = DPI/72）。
    * 2x 仅 ~144 DPI：会把 300 DPI 扫描件降采样一半，小字号正文被压缩到 ~20px 高，
    * det 热力带断裂 + rec 拉伸失真 → 系统性误识。4x ≈ 288 DPI，接近扫描原生分辨率，
@@ -631,6 +686,8 @@
   var OCR_MAX_SIDE = 4000;
   /** 每页 OCR 前重置该侧 pending 标记 */
   var ocrRunToken = { L: 0, R: 0 };
+  /** 该侧当前待 OCR 文件的绝对路径（写结果缓存用；扫描版检测到即登记，弹窗/无头共用） */
+  var ocrPathBySide = { L: null, R: null };
 
   /** 惰性创建 OCR Worker 并加载运行时（ort + 模型 + 字典）。返回 Promise<Worker>。 */
   function ensureOcrWorker() {
@@ -756,6 +813,8 @@
         cfg.onPanelText(side, text);
         setOcrState(side, 'done');
         if (cfg.onOcrProgress) cfg.onOcrProgress(side, { phase: 'done', pages: total });
+        if (ocrPathBySide[side]) ocrCachePut(ocrPathBySide[side], text, allItems);   // 识别结果落盘缓存（下次复用）
+        return { text: text, items: allItems };
       });
     }).catch(function (err) {
       if (my !== ocrSeq) return;

@@ -35,6 +35,23 @@ function callApi(req) {
   });
 }
 
+/** POST 请求 mock（handleApi 对 POST 用 req.on('data'/'end') 收 body） */
+function callApiPost(url, bodyObj) {
+  return new Promise(function (resolve) {
+    var req = new (require('http').IncomingMessage)(null);
+    req.method = 'POST';
+    req.url = url;
+    req.headers = { 'content-type': 'application/json' };
+    var res = mockRes();
+    serve.handleApi(req, res);
+    req.emit('data', Buffer.from(JSON.stringify(bodyObj)));
+    req.emit('end');
+    var iv = setInterval(function () {
+      if (res._done) { clearInterval(iv); resolve(res); }
+    }, 5);
+  });
+}
+
 function bodyOf(res) { return res._chunks.map(String).join(''); }
 
 var passed = 0, failed = 0;
@@ -47,6 +64,8 @@ var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diffchecker-api-'));
 fs.mkdirSync(path.join(tmp, '子文件夹'));
 fs.writeFileSync(path.join(tmp, '子文件夹', '原始文件.pdf'), Buffer.from('%PDF-1.4 test pdf bytes'));
 fs.writeFileSync(path.join(tmp, '说明.txt'), 'hello\nworld');
+// OCR 缓存目录隔离到测试临时目录，避免污染真实缓存
+process.env.DSH_OCR_CACHE = path.join(tmp, 'ocr-cache');
 
 (async function main() {
   console.log('api list + file\n');
@@ -96,6 +115,43 @@ fs.writeFileSync(path.join(tmp, '说明.txt'), 'hello\nworld');
   // 未知 API
   res = await callApi({ url: '/api/other' });
   check('未知 API → 404 {ok:false}', res._code === 404 && JSON.parse(bodyOf(res)).ok === false);
+
+  // ---------- OCR 结果缓存 ----------
+  console.log('\nocr cache\n');
+  var ocrTarget = path.join(tmp, 'scan.pdf');
+  fs.writeFileSync(ocrTarget, Buffer.from('%PDF-1.4 v1'));
+  var ocrItems = [{ page: 1, boxes: [{ transform: [12, 0, 0, 12, 1, 2], width: 9, line: 1, col: 0, str: '测', hasEOL: true, ocr: true }] }];
+
+  // 写缓存
+  res = await callApiPost('/api/ocr-cache', { path: ocrTarget, text: '识别结果文本', items: ocrItems });
+  check('POST /api/ocr-cache 写入 → ok:true', res._code === 200 && JSON.parse(bodyOf(res)).ok === true);
+
+  // 命中
+  res = await callApi({ url: '/api/ocr-cache?path=' + encodeURIComponent(ocrTarget) });
+  var hit = JSON.parse(bodyOf(res));
+  check('GET 命中返回 text+items',
+    hit.ok === true && hit.hit === true && hit.text === '识别结果文本' && hit.items.length === 1 && hit.pages === 1);
+
+  // 文件内容变化（size/mtime 变）→ key 变 → miss
+  fs.writeFileSync(ocrTarget, Buffer.from('%PDF-1.4 v2 changed'));
+  res = await callApi({ url: '/api/ocr-cache?path=' + encodeURIComponent(ocrTarget) });
+  check('文件内容变化 → miss', JSON.parse(bodyOf(res)).hit === false);
+
+  // 不同路径 → miss
+  res = await callApi({ url: '/api/ocr-cache?path=' + encodeURIComponent(path.join(tmp, '说明.txt')) });
+  check('不同文件路径 → miss', JSON.parse(bodyOf(res)).hit === false);
+
+  // 不存在的文件 → 404
+  res = await callApi({ url: '/api/ocr-cache?path=' + encodeURIComponent(path.join(tmp, '不存在.pdf')) });
+  check('GET 不存在的文件 → 404', res._code === 404);
+
+  // POST 缺 text/items → 400
+  res = await callApiPost('/api/ocr-cache', { path: ocrTarget });
+  check('POST 缺 text/items → 400', res._code === 400 && JSON.parse(bodyOf(res)).ok === false);
+
+  // POST 不存在的文件 → 404
+  res = await callApiPost('/api/ocr-cache', { path: path.join(tmp, '不存在.pdf'), text: 'x', items: ocrItems });
+  check('POST 不存在的文件 → 404', res._code === 404);
 
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);

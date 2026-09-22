@@ -529,7 +529,7 @@ function rawOptions(M) {
   return o;
 }
 /** 页面内驱动：加载两侧 → 比较 → 取结果 → 逐页快照。返回 {leftName,rightName,result,shots} */
-async function renderPair(pair, opts, idx) {
+async function renderPair(pair, opts, idx, warnings) {
   var left = path.resolve(pair.left), right = path.resolve(pair.right);
   if (!fs.existsSync(left)) throw new Error('左侧文件不存在：' + left);
   if (!fs.existsSync(right)) throw new Error('右侧文件不存在：' + right);
@@ -586,8 +586,13 @@ async function renderPair(pair, opts, idx) {
         'return eds.length>1?eds[' + (os === 'L' ? 0 : 1) + '].CodeMirror.getValue().length:0;})()})',
         function (v) {
           var s = JSON.parse(v);
-          // 文字层 PDF 直接 idle；扫描版 OCR 完成（done）或该侧编辑器已有文本即通过
-          return s.s === 'idle' || s.s === 'done' || s.ed > 0 || s.s === 'failed';
+          // 文字层 PDF 的 OCR 状态恒为 idle → 直接通过；
+          // 扫描版 PDF：pending/running = OCR 或缓存注入仍在途，必须等落定（done/failed）——
+          // 绝不能因编辑器残留上一对的文本（s.ed > 0）短路，否则 textItems 尚未注入，
+          // 报告快照的差异标注会画不出来（历史 bug：多对连跑时第 2 对起的扫描页无标注）。
+          if (s.s === 'failed') return true;                     // OCR 失败：按原设计继续（该侧无文本，进 warnings）
+          if (s.s === 'pending' || s.s === 'running') return false;
+          return s.s === 'idle' || s.s === 'done';               // idle（文字层）或 done（OCR/缓存注入完成）
         }, 240, os + ' 侧 OCR 完成');   // 240×300ms≈72s，覆盖首次模型加载 + 逐页识别
       var stj = JSON.parse(st);
       if (stj.s === 'failed') {
@@ -793,7 +798,7 @@ function addStats(stats, result) {
   var pairs = [];
   for (i = 0; i < task.pairs.length; i++) {
     try {
-      var p = await renderPair(task.pairs[i], task.options, i);
+      var p = await renderPair(task.pairs[i], task.options, i, warnings);
       pairs.push(p);
       addStats(stats, p.result);
     } catch (e) {
