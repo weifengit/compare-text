@@ -299,12 +299,20 @@ function cleanup() {
   } catch (e2) {}
   try { if (serverProc) serverProc.kill(); } catch (e3) {}
 }
-// 坑 5：看门狗，卡住时给出失败 JSON 而非静默挂死
-var WATCHDOG = setTimeout(function () {
-  process.stderr.write('!! 看门狗触发：240s 未完成，强制退出\n');
-  process.stdout.write(JSON.stringify({ ok: false, output: null, stats: { pairs: 0, added: 0, removed: 0, changed: 0 }, warnings: ['看门狗超时'] }) + '\n');
-  try { process.exit(3); } catch (e) {}
-}, 240000);
+// 坑 5：看门狗，卡住时给出失败 JSON 而非静默挂死。
+// 原实现：单次 240s 定时器全程不重置 → 一批超过 10 对（含 OCR 扫描件）时会误杀。
+// 改为 armWatchdog()：每对开始前重挂，看门狗只负责"当前这一对"不卡死，全程时长不受 240s 限制。
+var WATCHDOG = null;
+var WATCHDOG_MS = parseInt(process.env.DSH_WATCHDOG_MS || '600000', 10);
+function armWatchdog() {
+  if (WATCHDOG) clearTimeout(WATCHDOG);
+  WATCHDOG = setTimeout(function () {
+    process.stderr.write('!! 看门狗触发：' + (WATCHDOG_MS / 1000) + 's 当前对未完成，强制退出\n');
+    process.stdout.write(JSON.stringify({ ok: false, output: null, stats: { pairs: 0, added: 0, removed: 0, changed: 0 }, warnings: ['看门狗超时'] }) + '\n');
+    try { process.exit(3); } catch (e) {}
+  }, WATCHDOG_MS);
+}
+armWatchdog();
 
 // ---------- 逐页快照采集（B4） ----------
 /** 坑 3：把面板滚到指定位置并确认"稳住了"；目标值在页面内 clamp 到 scrollHeight-clientHeight
@@ -593,7 +601,7 @@ async function renderPair(pair, opts, idx, warnings) {
           if (s.s === 'failed') return true;                     // OCR 失败：按原设计继续（该侧无文本，进 warnings）
           if (s.s === 'pending' || s.s === 'running') return false;
           return s.s === 'idle' || s.s === 'done';               // idle（文字层）或 done（OCR/缓存注入完成）
-        }, 240, os + ' 侧 OCR 完成');   // 240×300ms≈72s，覆盖首次模型加载 + 逐页识别
+        }, 600, os + ' 侧 OCR 完成');   // 600×300ms≈180s，覆盖首次模型加载 + 大扫描件逐页识别
       var stj = JSON.parse(st);
       if (stj.s === 'failed') {
         var msg = '第 ' + (idx + 1) + ' 对 ' + os + ' 侧扫描版 OCR 失败（报告该侧无文本）';
@@ -797,6 +805,7 @@ function addStats(stats, result) {
   // 逐对处理：单对失败只记 warning 继续
   var pairs = [];
   for (i = 0; i < task.pairs.length; i++) {
+    armWatchdog();   // 看门狗按对重挂：大批量（>10 对）不会误杀
     try {
       var p = await renderPair(task.pairs[i], task.options, i, warnings);
       pairs.push(p);
