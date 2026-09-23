@@ -67,8 +67,15 @@
     '.rep-shotcols{display:grid;grid-template-columns:1fr 1fr;gap:10px}' +
     '.rep-shotcol{min-width:0}.rep-shotcol+.rep-shotcol{border-left:1px solid var(--border);padding-left:10px}' +
     '.rep-shot{text-align:center;margin-bottom:12px}' +
-    '.rep-shot img{max-width:100%;border:1px solid var(--border);border-radius:4px;cursor:zoom-in}' +
-    '.rep-shot img.zoomed{max-width:none;cursor:zoom-out}' +
+    // 快照默认「适应宽度」：图片始终铺满所在列宽，原图较窄时不再两侧留白；点击放大到原始像素
+    '.rep-shot img{width:100%;height:auto;border:1px solid var(--border);border-radius:4px;cursor:zoom-in}' +
+    '.rep-shot img.zoomed{width:auto;max-width:none;height:auto;cursor:zoom-out}' +
+    // 快照视图模式（整份报告统一切换，默认适应宽度；与界面 PDF 缩放的「适应宽度」一致）
+    '.rep-shotmode{display:flex;gap:4px;align-items:center;margin:0 0 8px}' +
+    '.rep-shotmode button{font:inherit;font-size:12px;padding:1px 10px;border:1px solid var(--border);' +
+    'background:#fff;border-radius:4px;cursor:pointer;color:var(--muted)}' +
+    '.rep-shotmode button.on{background:#eef3f9;color:var(--txt);font-weight:600;border-color:#c8d4e2}' +
+    '.rep-shotcol.mode-actual .rep-shot img{width:auto;max-width:100%;height:auto}' +
     '.rep-shot .cap{font-size:11px;color:var(--muted);margin-top:4px}' +
     '.rep-empty{padding:20px;color:var(--muted)}' +
     // C1 批量总览
@@ -365,7 +372,10 @@
       '<div class="rep-view rep-view-redline" hidden><div class="rep-redline">' + RL + '</div></div>' +
       '</div>' +
       rawHtml +
-      '<div class="rep-shots"><h2>原始文件快照（含差异标注）</h2><div class="rep-shotcols">' +
+      '<div class="rep-shots"><h2>原始文件快照（含差异标注）</h2>' +
+      '<div class="rep-shotmode"><button type="button" data-shotmode="width" class="on" title="页面铺满所在列宽（消除两侧空白）">适应宽度</button>' +
+      '<button type="button" data-shotmode="actual" title="按原始像素大小显示">原始大小</button></div>' +
+      '<div class="rep-shotcols">' +
       '<div class="rep-shotcol"><div class="rep-colhead">原文</div>' + shotsHtml((pair.shots && pair.shots.L) || []) + '</div>' +
       '<div class="rep-shotcol"><div class="rep-colhead">修改后</div>' + shotsHtml((pair.shots && pair.shots.R) || []) + '</div>' +
       '</div></div>' +
@@ -410,6 +420,17 @@
     'function sync(src,dst){if(lock)return;lock=true;dst.scrollTop=src.scrollTop;lock=false;}' +
     'a.addEventListener("scroll",function(){sync(a,b);});' +
     'b.addEventListener("scroll",function(){sync(b,a);});' +
+    '});' +
+    // 快照视图模式切换（默认适应宽度；整份报告统一切换，localStorage 记住选择）
+    'document.querySelectorAll(".rep-shots").forEach(function(sec){' +
+    'var btns=sec.querySelectorAll("[data-shotmode]");' +
+    'function applyMode(m){sec.querySelectorAll(".rep-shotcol").forEach(function(c){' +
+    'c.classList.toggle("mode-actual",m==="actual");});' +
+    'btns.forEach(function(b){b.classList.toggle("on",b.getAttribute("data-shotmode")===m);});' +
+    'try{window.localStorage.setItem("repShotMode",m);}catch(e){}}' +
+    'var sm=null;try{sm=window.localStorage.getItem("repShotMode");}catch(e){}' +
+    'applyMode(sm==="actual"?"actual":"width");' +
+    'btns.forEach(function(b){b.onclick=function(){applyMode(b.getAttribute("data-shotmode"));};});' +
     '});' +
     // 快照点击放大/还原
     'document.querySelectorAll(".rep-shot img").forEach(function(im){' +

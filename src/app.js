@@ -453,19 +453,21 @@
     if (lb && rb && lb !== rb) return lb + '-' + rb + '-' + stamp + '.html';
     return '对比报告-' + stamp + '.html';
   }
-  /** 采集单侧逐页快照（PDF 直接光栅化；docx/纯文本无快照 → 空数组，报告显示"无快照"） */
+  /** 采集单侧逐页快照（PDF 直接光栅化；docx/纯文本无快照 → 空数组，报告显示"无快照"）。
+   *  采样统一 ~2x（与无头渲染通道的 1224×1584/页 约定一致）：报告里"适应宽度"铺满列宽
+   *  后文字依旧清晰，放大看原始像素也有细节；rasterizePage 最终像素 = vp×targetScale×dpr，
+   *  故 targetScale 取 2/dpr，任何显示器/缩放率下都得到约 2x 的成图。 */
   function captureShots(side) {
     var n = (PdfView.getNumPages && PdfView.getNumPages(side)) || 0;
     if (!n) return Promise.resolve([]);
+    var dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    var target = 2 / dpr;
     var out = [];
     var chain = Promise.resolve();
     for (var p = 1; p <= n; p++) {
       (function (pageNum) {
         chain = chain.then(function () {
-          if (!PdfView.isPageRendered || !PdfView.isPageRendered(side, pageNum)) {
-            return PdfView.rasterizePage(side, pageNum, 1, false);
-          }
-          return PdfView.rasterizePage(side, pageNum, 1, false);
+          return PdfView.rasterizePage(side, pageNum, target, false);
         }).then(function (r) { if (r && r.data) out.push({ data: r.data, w: r.w, h: r.h }); });
       })(p);
     }
@@ -498,6 +500,11 @@
     });
   }
 
+  /** 是否运行在（可能是跨源的）内嵌 frame 里。跨源 iframe 内 window.top 访问会抛错 → 视为在 frame 内。 */
+  function inEmbeddedFrame() {
+    try { return !!(window.self !== window.top); } catch (e) { return true; }
+  }
+
   function exportReport() {
     var r = Pipeline.getResult ? Pipeline.getResult() : null;
     if (!r || r.error) { toast('没有可导出的对比结果', true); return; }
@@ -525,7 +532,23 @@
       });
       return;
     }
-    // 浏览器版：先弹系统"另存为"捕获用户手势（报告生成耗时可观，手势会过期），再生成、再写入
+    // 内嵌 frame（如 dsh 插件浮层，跨源）：浏览器禁止跨源子 frame 弹系统保存框
+    // （showSaveFilePicker 直接抛错），改为"生成后直接下载"到浏览器下载目录。
+    if (inEmbeddedFrame()) {
+      toast('正在生成报告…（内嵌窗口中无法选择保存位置，将保存到浏览器下载目录）');
+      Promise.all([captureShots('L'), captureShots('R')]).then(function (sh) {
+        lastShots = { L: sh[0], R: sh[1] };
+        var html = buildReportHtml(r, pL, pR);
+        return Source.writeFile(name, html);
+      }).then(function () {
+        toast('报告已导出（已保存到浏览器下载目录）：' + name);
+      }).catch(function (e) {
+        toast('导出失败：' + ((e && e.message) || e), true);
+      });
+      return;
+    }
+    // 顶层页面：先弹系统"另存为"捕获用户手势（报告生成耗时可观，手势会过期），再生成、再写入。
+    // 弹框被拒/浏览器不支持时降级为直接下载，不阻断导出。
     toast('请选择报告保存位置…');
     Source.saveAsHandle(name).then(function (handle) {
       if (!handle) { toast('当前浏览器不支持选择保存位置，将改为直接下载', true); }
@@ -539,7 +562,17 @@
     }).then(function (savedName) {
       toast('报告已导出：' + (savedName || name));
     }).catch(function (e) {
-      toast('导出失败：' + ((e && e.message) || e), true);
+      if (e && (e.name === 'AbortError' || e.message === '已取消保存')) return;   // 用户取消：静默
+      // 其余失败（如被嵌入环境禁止弹框）→ 降级为直接下载，保证报告能导出
+      toast('无法弹出保存位置选择，将改为直接下载', true);
+      Promise.all([captureShots('L'), captureShots('R')]).then(function (sh) {
+        lastShots = { L: sh[0], R: sh[1] };
+        return Source.writeFile(name, buildReportHtml(r, pL, pR));
+      }).then(function () {
+        toast('报告已导出（已保存到浏览器下载目录）：' + name);
+      }).catch(function (e2) {
+        toast('导出失败：' + ((e2 && e2.message) || e2), true);
+      });
     });
   }
   if (exportReportBtn) exportReportBtn.addEventListener('click', exportReport);

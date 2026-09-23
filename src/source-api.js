@@ -89,10 +89,15 @@
    * 浏览器模式：弹出系统"另存为"对话框，返回可写的文件句柄（需在用户手势窗口内调用）。
    * 报告生成耗时可观，故把"弹框取句柄"与"写入"拆开：先弹框捕获手势，生成后再写。
    * 不支持 File System Access API 时返回 null（调用方回退 Blob 下载）。
-   * Tauri 模式不适用（返回 null，调用方走 Picker + writeFile 流程）。
+   * 运行在（可能跨源的）内嵌 frame 里时也返回 null：浏览器禁止跨源子 frame 弹文件选择框
+   * （showSaveFilePicker 抛 "Cross origin sub frames aren't allowed to show a file picker"），
+   * 调用方应回退为直接下载。Tauri 模式不适用（返回 null，调用方走 Picker + writeFile 流程）。
    */
+  function inEmbeddedFrame() {
+    try { return !!(root.self !== root.top); } catch (e) { return true; }
+  }
   function saveAsHandle(name) {
-    if (isTauri || !root.showSaveFilePicker) return Promise.resolve(null);
+    if (isTauri || inEmbeddedFrame() || !root.showSaveFilePicker) return Promise.resolve(null);
     var types = [{ description: 'HTML 报告', accept: { 'text/html': ['.html'] } }];
     return root.showSaveFilePicker({ suggestedName: name, types: types })
       .then(function (handle) { return handle; })
