@@ -1,0 +1,191 @@
+name: 构建并发布 Release
+
+on:
+  push:
+    tags: [ 'v*' ]              # 手动推 tag（或配置了 RELEASE_PAT 时的自动推 tag）
+  workflow_dispatch:            # GitHub 页面手动触发 / 自动发布工作流 API 接力
+    inputs:
+      tag:
+        description: '发布标签（如 v1.3.0；留空则用 tauri.conf.json 里的版本号）'
+        required: false
+        default: ''
+      draft:
+        description: '生成为草稿 Release（不对外可见，需手动发布）'
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: '标记为预发布（Pre-release）'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false     # 绝不取消进行中的发布
+
+jobs:
+  build:
+    permissions:
+      contents: write           # 创建 Release + 上传安装包
+    strategy:
+      fail-fast: false          # 一个平台失败不中断其他平台
+      matrix:
+        platform: [ macos-latest, windows-latest, ubuntu-22.04 ]
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0         # 生成更新日志需要完整历史与 tags
+
+      # 最终标签优先级：手动输入 tag > push 的 tag > 配置文件里的版本号
+      - name: 确定发布标签
+        id: tag
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ] && [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if [ -z "$TAG" ]; then
+            TAG="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "已确定发布标签: $TAG"
+
+      # 版本对齐：标签与 5 个版本文件不一致时用 bump 脚本同步（幂等，保证安装包版本=标签）
+      - name: 同步版本文件到标签
+        shell: bash
+        run: |
+          TAG_VER="${TAG#v}"
+          CFG_VER="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [ "$CFG_VER" != "$TAG_VER" ]; then
+            node scripts/bump-version.js "$TAG_VER"
+            echo "已同步版本 $CFG_VER -> $TAG_VER"
+          else
+            echo "版本已一致（$CFG_VER），无需同步"
+          fi
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 编译缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: 安装 Linux 系统依赖
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf
+
+      - name: 安装 npm 依赖
+        run: npm ci
+
+      # ===== 自动生成更新日志（上一 tag .. 当前 tag）=====
+      - name: 生成更新日志
+        id: changelog
+        shell: bash
+        run: |
+          PREV="$(git describe --tags --abbrev=0 --match 'v*' "${{ env.TAG }}"^ 2>/dev/null \
+                  || git rev-list --max-parents=0 HEAD | tail -n1)"
+          END="${{ env.TAG }}"
+          if ! git rev-parse --verify --quiet "$END" >/dev/null 2>&1; then END="HEAD"; fi
+          {
+            echo '## 变更内容'
+            echo ''
+            git log --oneline --no-merges "${PREV}..${END}" | grep -v 'chore(release):' || true
+            echo ''
+            echo '## 安装包'
+            echo ''
+            echo '- **macOS**: .dmg / .app（未签名版本 macOS 首次打开需右键→打开）'
+            echo '- **Windows**: .msi / .exe'
+            echo '- **Linux**: .deb / .rpm / .AppImage'
+          } > changelog.txt
+          {
+            echo "log<<EOF"
+            cat changelog.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # ===== 代码签名（可选）：仅当对应 Secret 配置了证书时才走签名版步骤，
+      #      未签名步骤的 env 完全不引用签名变量，杜绝「空 Secret 触发 security import」报错 =====
+
+      - name: 构建并发布（macOS 签名版）
+        if: matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE != ''
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ env.TAG }}
+          releaseName: 'compare-text ${{ env.TAG }}'
+          releaseBody: ${{ steps.changelog.outputs.log }}
+          releaseDraft: ${{ inputs.draft || false }}
+          prerelease: ${{ inputs.prerelease || false }}
+
+      - name: 构建并发布（macOS 未签名版）
+        if: matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE == ''
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ env.TAG }}
+          releaseName: 'compare-text ${{ env.TAG }}'
+          releaseBody: ${{ steps.changelog.outputs.log }}
+          releaseDraft: ${{ inputs.draft || false }}
+          prerelease: ${{ inputs.prerelease || false }}
+
+      - name: 构建并发布（Windows 签名版）
+        if: matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE != ''
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        with:
+          tagName: ${{ env.TAG }}
+          releaseName: 'compare-text ${{ env.TAG }}'
+          releaseBody: ${{ steps.changelog.outputs.log }}
+          releaseDraft: ${{ inputs.draft || false }}
+          prerelease: ${{ inputs.prerelease || false }}
+
+      - name: 构建并发布（Windows 未签名版）
+        if: matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE == ''
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ env.TAG }}
+          releaseName: 'compare-text ${{ env.TAG }}'
+          releaseBody: ${{ steps.changelog.outputs.log }}
+          releaseDraft: ${{ inputs.draft || false }}
+          prerelease: ${{ inputs.prerelease || false }}
+
+      - name: 构建并发布（Linux）
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ env.TAG }}
+          releaseName: 'compare-text ${{ env.TAG }}'
+          releaseBody: ${{ steps.changelog.outputs.log }}
+          releaseDraft: ${{ inputs.draft || false }}
+          prerelease: ${{ inputs.prerelease || false }}

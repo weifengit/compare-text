@@ -106,10 +106,11 @@ bash scripts/install-dsh-plugin.sh
 详见 [docs/dsh-offline-install.md](docs/dsh-offline-install.md)
 （含手动步骤、验证、卸载、完全离线场景与常见问题）。
 
-## 打包桌面应用（GitHub Actions 自动打包）
+## 发布与版本管理（GitHub Actions 自动打包）
 
-推送 `v*` 标签（如 `v1.0.0`），或在 GitHub 仓库 Actions 页面手动触发 **“打包发布”**，
-[GitHub Actions](.github/workflows/build.yml) 会在 **macOS / Windows / Linux** 三平台自动构建并发布安装包到 Release：
+**全自动发布（推荐）**：把代码推到 `main` 分支即可——[auto-version.yml](.github/workflows/auto-version.yml)
+会自动把版本号 `patch +1`（提交信息含 `[release:minor]` / `[release:major]` 则升 minor / major），
+然后 [release.yml](.github/workflows/release.yml) 在 **macOS / Windows / Linux** 三平台自动打包并发布正式 Release：
 
 | 平台    | 产物                       |
 | ------- | -------------------------- |
@@ -117,8 +118,14 @@ bash scripts/install-dsh-plugin.sh
 | Windows | NSIS`.exe`（另含 MSI）   |
 | Linux   | AppImage（另含 deb / rpm） |
 
+也可手动控制节奏：打 tag（`git tag vX.Y.Z && git push origin vX.Y.Z`）或
+在仓库 Actions 页面手动触发「构建并发布 Release」。
+
 CI 是自包含的：`lib/` 与图标已入库，构建前会自动生成 `dist/`，**本地无需任何打包产物**。
-macOS 签名 / 公证、Windows 代码签名的配置见 [PACKAGING.md](PACKAGING.md)。
+
+**完整的发布/版本管理文档见 [docs/RELEASE.md](docs/RELEASE.md)**：
+版本号 5 处存放位置与 `scripts/bump-version.js` 用法、自动/手动发布步骤、
+代码签名（macOS / Windows）配置、常见问题排查等。
 
 本地打包（可选）：需 Node.js LTS + Rust stable，执行
 
@@ -127,7 +134,7 @@ npm install
 npm run build:desktop   # = tauri build：自动先 `node serve.js build` 生成 dist/，再编译 + 打包
 ```
 
-产物在 `src-tauri/target/release/bundle/`，分平台差异与常见问题同样见 PACKAGING.md。
+产物在 `src-tauri/target/release/bundle/`。
 
 架构说明：桌面模式下没有 Node 服务器，`src/source-api.js` 检测到 Tauri 环境后，
 自动把 `/api/list`、`/api/browse`、`/api/file` 切换为同名 Rust 命令（`src-tauri/src/lib.rs`）；

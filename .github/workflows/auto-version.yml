@@ -1,0 +1,108 @@
+name: 自动迭代版本并触发发布
+
+on:
+  push:
+    branches: [ main ]           # 提交到 main 即自动迭代版本号并发布
+
+concurrency:
+  group: auto-version-${{ github.ref }}
+  cancel-in-progress: true       # 连续快速提交时只保留最新一次，避免并发加号
+
+jobs:
+  bump:
+    # 循环防护 1：版本号自动提交（chore(release): 开头）不再触发本流程
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write            # 提交版本号 + 打 tag
+      actions: write             # 无 PAT 时用 gh workflow run 接力（dispatch）
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # 需要全部历史 + tags 来计算下一版本
+          persist-credentials: true
+
+      # 循环防护 2：HEAD 已精确对应某个版本 tag → 本提交已被处理过，直接退出
+      - name: 循环防护（HEAD 已打标签）
+        shell: bash
+        run: |
+          if git describe --tags --exact-match HEAD >/dev/null 2>&1; then
+            echo "HEAD 已精确打标签，跳过自动迭代"
+            exit 0
+          fi
+          echo "HEAD 未打标签，继续"
+
+      # 版本升级级别：默认 patch；提交信息含 [release:minor]/[release:major] 时升 minor/major
+      - name: 确定版本升级级别（提交信息关键词）
+        id: level
+        shell: bash
+        run: |
+          MSG="$(git log -1 --pretty=%B)"
+          if echo "$MSG" | grep -qi '\[release:major\]'; then LEVEL=major
+          elif echo "$MSG" | grep -qi '\[release:minor\]'; then LEVEL=minor
+          else LEVEL=patch; fi
+          echo "LEVEL=$LEVEL" >> "$GITHUB_ENV"
+          echo "升级级别: $LEVEL"
+
+      - name: 计算新版本号并同步 5 个文件
+        id: bump
+        shell: bash
+        run: |
+          NEW="$(node scripts/bump-version.js "$LEVEL")"
+          echo "NEW=$NEW" >> "$GITHUB_ENV"
+          echo "新版本: v$NEW"
+
+      # 配置 push 凭据：配置了 RELEASE_PAT 时用它（打的 tag 能触发 tag 工作流），
+      # 否则用 GITHUB_TOKEN（打的 tag 不触发工作流，最后由下方 dispatch 接力）。
+      - name: 配置 push 凭据
+        shell: bash
+        run: |
+          if [ -n "$RELEASE_PAT" ]; then
+            git remote set-url origin "https://x-access-token:${RELEASE_PAT}@github.com/${{ github.repository }}.git"
+            echo "使用 RELEASE_PAT 推送"
+          else
+            git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+            echo "使用 GITHUB_TOKEN 推送（后续以 dispatch 接力）"
+          fi
+        env:
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 提交版本号、推送 main 与 tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git commit -m "chore(release): v${NEW}" || { echo "无版本变更可提交"; exit 0; }
+          git push origin HEAD:main
+          if git ls-remote --exit-code --tags origin "refs/tags/v${NEW}" >/dev/null 2>&1; then
+            echo "tag v${NEW} 已存在，跳过打 tag"
+          else
+            git tag "v${NEW}"
+            git push origin "v${NEW}"
+            echo "已推送 tag v${NEW}"
+          fi
+        env:
+          NEW: ${{ env.NEW }}
+
+      # 无 RELEASE_PAT 时：GITHUB_TOKEN 推的 tag 不会触发 tag 工作流，
+      # 改用 workflow_dispatch 接力（该事件对 GITHUB_TOKEN 豁免，可靠触发 release.yml）。
+      - name: 触发发布流水线（无 PAT 时接力）
+        if: ${{ secrets.RELEASE_PAT == '' }}
+        shell: bash
+        run: |
+          for i in $(seq 1 10); do
+            if gh workflow run release.yml --ref "v${NEW}" 2>/dev/null; then
+              echo "已触发 release.yml（ref=v${NEW}）"
+              exit 0
+            fi
+            echo "等待 tag 生效重试（$i/10）..."
+            sleep 3
+          done
+          echo "触发失败：请手动到 Actions 页面运行「构建并发布 Release」" >&2
+          exit 1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW: ${{ env.NEW }}
