@@ -35,17 +35,18 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0         # 生成更新日志需要完整历史与 tags
 
-      # 最终标签优先级：手动输入 tag > push 的 tag > 配置文件里的版本号
+      # 最终标签优先级：手动输入 tag > github.ref_name 是 v* 标签时用 tag > 配置文件里的版本号
+      # 说明：push tags 或 dispatch 以 tag 为 ref 时，github.ref_name 都是该 tag。
       - name: 确定发布标签
         id: tag
         shell: bash
         run: |
           TAG="${{ inputs.tag }}"
-          if [ -z "$TAG" ] && [ "${{ github.event_name }}" = "push" ]; then
+          if [ -z "$TAG" ] && [[ "${GITHUB_REF_NAME}" == v* ]]; then
             TAG="${GITHUB_REF_NAME}"
           fi
           if [ -z "$TAG" ]; then
@@ -68,7 +69,7 @@ jobs:
           fi
 
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm

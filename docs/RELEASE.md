@@ -41,14 +41,17 @@ node scripts/bump-version.js patch --dry-run  # 只预览，不写盘
    ↓ 触发
 auto-version.yml（自动迭代版本并触发发布）
    1. 取最新版本 tag（如 v1.2.0），默认补丁号 +1 → 1.2.1
-   2. 用 bump 脚本同步 5 个文件
-   3. 提交 chore(release): v1.2.1 并推送 main + 打 tag v1.2.1
-   4. 触发 release.yml
+   2. 打 tag v1.2.1 并推送（★ 不改动 main，不会产生需要你同步的提交）
+   3. 触发 release.yml
       ↓ 触发
 release.yml（构建并发布 Release）
    在 macos-latest / windows-latest / ubuntu-22.04 三平台并行打包
+   构建时自动把 5 个版本文件对齐到 tag（1.2.1）
    自动生成更新日志，上传安装包并发布正式 Release
 ```
+
+> **关键点**：CI **绝不往 main 提交任何内容**，只在云端新增一个 `vX.Y.Z` tag。
+> 云端 main 永远只含你自己的提交，本地 `git pull` 永远不会遇到需要合并的 CI 提交。
 
 ### 日常用法
 
@@ -139,12 +142,10 @@ git push origin v1.3.0        # ⬅ 推 tag 即触发 release.yml 三平台打�
 
 关键机制（GitHub 官方行为）：
 
-1. **用 `GITHUB_TOKEN` push 的提交/tag 不会再触发任何 push 工作流**——这是防止递归的核心。唯一例外是 `workflow_dispatch` / `repository_dispatch`。
-2. 因此自动发布工作流：
-   - 未配置 `RELEASE_PAT` 时：用 `GITHUB_TOKEN` 推 tag（不触发），最后用 `gh workflow run` **显式 dispatch** 触发 `release.yml`；
-   - 配置了 `RELEASE_PAT`（可选）：用 PAT 推 tag，天然触发 `push tags: v*` 事件，不需要 dispatch。
-3. 循环防护三件套：`auto-version.yml` 的 job 级 `if` 跳过 `chore(release):` 开头的提交 + HEAD 已打 tag 守卫 + 连续提交用 `concurrency` 折叠为最新一次。
-4. `release.yml` 只构建、只创建 Release，**从不推代码**，所以不会产生新事件。
+1. **用 `GITHUB_TOKEN` push 的提交/tag 不会再触发任何 push 工作流**——唯一例外是 `workflow_dispatch` / `repository_dispatch`。
+2. 自动发布工作流因此只做两件事：**打 tag**（不改动 main），然后 `gh workflow run` **显式 dispatch** 触发 `release.yml`（该事件对 `GITHUB_TOKEN` 豁免，**无需配置任何 PAT**）。
+3. **为什么本地永远不用合并**：CI 从不往 main 提交或推送，云端 main 只会因为你自己的 push 而前进；CI 只新增一个 tag，tag 不占用 main 分支，本地 `git pull` 不会遇到它。
+4. 循环防护：HEAD 已精确打 tag 守卫 + 连续提交用 `concurrency` 折叠为最新一次。`release.yml` 只构建、只创建 Release，**从不推代码**，不会产生新事件。
 
 ---
 
@@ -154,14 +155,11 @@ git push origin v1.3.0        # ⬅ 推 tag 即触发 release.yml 三平台打�
 
 无。自动发布默认可用（走 `GITHUB_TOKEN` + dispatch 接力），不需要任何 secret。
 
-### 6.2 可选：配置 `RELEASE_PAT`（让 tag push 直接触发，更标准）
+### 6.2 无需任何 Token / PAT
 
-1. GitHub → 头像 → Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. 勾选 `repo`（或 fine-grained token：仅本仓库 + `Contents: Read and write`）
-3. 仓库 → Settings → Secrets and variables → Actions → **New repository secret**
-4. Name: `RELEASE_PAT`，Value: 刚生成的 token
+自动发布完全依赖内置的 `GITHUB_TOKEN`（通过 `workflow_dispatch` 接力触发），**不需要配置任何 PAT 或额外 Secret**。
 
-> ⚠️ 如果 main 分支开了**分支保护**（要求 PR 合入、禁止直接推送），CI 的自动提交会被拒，自动发布会失败。此时要么放行 `github-actions[bot]`（或放行该 PAT），要么改用第三节的手动发布。
+> ⚠️ 若 main 分支开了**分支保护**，不影响 CI（CI 不再往 main 提交）；只影响你自己手动推 tag / 推 main 时的规则。
 
 ### 6.3 可选：代码签名
 
@@ -192,7 +190,7 @@ git push origin v1.3.0        # ⬅ 推 tag 即触发 release.yml 三平台打�
 | macOS 构建报 `security import ... not valid` | 签名 Secret 配了一半（非空但无效）；检查 6.3 表格，或清空该 Secret 走未签名 |
 | `npm ci` 报 lockfile 不一致 | 别手改 package-lock.json，用 bump 脚本；或删掉本地改动重新 `npm ci` |
 | Linux 构建装依赖失败 | `ubuntu-22.04` 若被 GitHub 移除，把 `release.yml` 里的 `ubuntu-22.04` 改成 `ubuntu-24.04`（Tauri v2 同样适用） |
-| 标签版本与安装包版本不一致 | 手动打 tag 时没同步 5 个文件；`release.yml` 会自动对齐，但最好打 tag 前用脚本统一 |
+| 标签版本与安装包版本不一致 | `release.yml` 构建时会自动把 5 个版本文件对齐到 tag，通常不会出现；若仍不一致，确认手动打 tag 前是否用了 bump 脚本统一 |
 | Windows 安装包被 SmartScreen 拦截 | 未代码签名所致；正式分发请配置 6.3 的 Windows 证书 |
 
 ---
