@@ -55,14 +55,18 @@ jobs:
 
       # 配置 push 凭据：配置了 RELEASE_PAT 时用它（打的 tag 能触发 tag 工作流），
       # 否则用 GITHUB_TOKEN（打的 tag 不触发工作流，最后由下方 dispatch 接力）。
+      # 输出 pat=yes/no 供下方决定是否需要 dispatch 接力（secrets 不能用于步骤级 if）。
       - name: 配置 push 凭据
+        id: creds
         shell: bash
         run: |
           if [ -n "$RELEASE_PAT" ]; then
             git remote set-url origin "https://x-access-token:${RELEASE_PAT}@github.com/${{ github.repository }}.git"
+            echo "pat=yes" >> "$GITHUB_OUTPUT"
             echo "使用 RELEASE_PAT 推送"
           else
             git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+            echo "pat=no" >> "$GITHUB_OUTPUT"
             echo "使用 GITHUB_TOKEN 推送（后续以 dispatch 接力）"
           fi
         env:
@@ -90,7 +94,7 @@ jobs:
       # 无 RELEASE_PAT 时：GITHUB_TOKEN 推的 tag 不会触发 tag 工作流，
       # 改用 workflow_dispatch 接力（该事件对 GITHUB_TOKEN 豁免，可靠触发 release.yml）。
       - name: 触发发布流水线（无 PAT 时接力）
-        if: ${{ secrets.RELEASE_PAT == '' }}
+        if: steps.creds.outputs.pat == 'no'
         shell: bash
         run: |
           for i in $(seq 1 10); do

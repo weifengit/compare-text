@@ -119,11 +119,24 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # ===== 代码签名（可选）：仅当对应 Secret 配置了证书时才走签名版步骤，
-      #      未签名步骤的 env 完全不引用签名变量，杜绝「空 Secret 触发 security import」报错 =====
+      # ===== 代码签名（可选）=====
+      # 说明：GitHub 的 secrets 上下文不能用于步骤级 if:，故先探测 Secret 是否配置
+      #（steps 上下文在 if 中可靠可用）。探测步骤只把「是否非空」写入输出，不暴露值。
+      # 签名版步骤仅在对应 Secret 非空时运行；未签名版步骤的 env 完全不引用签名变量，
+      # 杜绝「空 Secret 触发 security import」报错。
+      - name: 探测签名 Secret 是否已配置
+        id: signing
+        shell: bash
+        env:
+          APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          WIN_CERT: ${{ secrets.WINDOWS_CERTIFICATE }}
+        run: |
+          echo "apple=$([ -n "$APPLE_CERT" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+          echo "win=$([ -n "$WIN_CERT" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+          echo "探测完成: apple=$([ -n "$APPLE_CERT" ] && echo yes || echo no), win=$([ -n "$WIN_CERT" ] && echo yes || echo no)"
 
       - name: 构建并发布（macOS 签名版）
-        if: matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE != ''
+        if: matrix.platform == 'macos-latest' && steps.signing.outputs.apple == 'yes'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -141,7 +154,7 @@ jobs:
           prerelease: ${{ inputs.prerelease || false }}
 
       - name: 构建并发布（macOS 未签名版）
-        if: matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE == ''
+        if: matrix.platform == 'macos-latest' && steps.signing.outputs.apple != 'yes'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -153,7 +166,7 @@ jobs:
           prerelease: ${{ inputs.prerelease || false }}
 
       - name: 构建并发布（Windows 签名版）
-        if: matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE != ''
+        if: matrix.platform == 'windows-latest' && steps.signing.outputs.win == 'yes'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -167,7 +180,7 @@ jobs:
           prerelease: ${{ inputs.prerelease || false }}
 
       - name: 构建并发布（Windows 未签名版）
-        if: matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE == ''
+        if: matrix.platform == 'windows-latest' && steps.signing.outputs.win != 'yes'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
