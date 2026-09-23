@@ -712,8 +712,11 @@ function addStats(stats, result) {
     process.exit(1);
   }
   // C3 分卷：一份报告默认最多 10 对，超出由调用方切成多份（本工具不自行分卷，直接拒绝）；
-  // 可用环境变量 DSH_MAX_PAIRS_PER_REPORT 调高上限（与 dsh-report.js 的 MAX_PER_REPORT 保持一致）
-  var maxPairs = parseInt(process.env.DSH_MAX_PAIRS_PER_REPORT || '10', 10);
+  // 上限优先级：任务字段 maxPairsPerReport > 环境变量 DSH_MAX_PAIRS_PER_REPORT > 10。
+  // walk 模式"每文件夹一份报告"（volume:"folder"）时 dsh-report.js 会给该卷带上足够大的
+  // maxPairsPerReport，使超 10 对的文件夹也能整份产出，不必拆卷。
+  var maxPairs = parseInt(task.maxPairsPerReport || process.env.DSH_MAX_PAIRS_PER_REPORT || '10', 10);
+  if (!(maxPairs > 0)) maxPairs = 10;
   if (task.pairs.length > maxPairs) {
     var mCap = '一份报告最多 ' + maxPairs + ' 对（当前 ' + task.pairs.length + ' 对），请将任务拆成多份分别渲染';
     process.stderr.write(mCap + '\n');
