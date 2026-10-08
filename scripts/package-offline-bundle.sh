@@ -65,8 +65,8 @@ cat > "$OUT_DIR_ABS/INSTALL.txt" <<'EOF'
            ③ 用 dsh --profile web --dump-config 验证
 
 3. 重启 DSH：dsh web，打开 http://127.0.0.1:3080
-   聊天输入框工具行出现「⇄ 文本对比」入口 = 插件 OK（想换位置改
-   plugins/dsh-compare-text/cordis.patch.yml 的 config.entry）；
+   插件自动在 127.0.0.1:3180 拉起 serve.js = 插件 OK；
+   界面展示：进入会话 → 侧边栏「项目中心」→ compare-text 卡片 →「展示」（需 dsh-tokensave）；
    对话里说「对比这两个文件夹的合同，出报告」= 技能 OK。
 
 4. 卸载：bash scripts/uninstall-dsh-plugin.sh

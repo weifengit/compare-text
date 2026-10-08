@@ -1,8 +1,8 @@
 {
   "name": "dsh-compare-text",
-  "version": "0.2.0",
   "private": true,
-  "description": "DSH 本地插件：把 compare-text 文本对比工具嵌入 DSH Web GUI（旧版全屏浮层 + dsh-worktable 工作台项目卡片双模式，仅本机 127.0.0.1，不对外发布）",
+  "description": "DSH 本地插件（仅服务端半侧）：DSH 启动时拉起 compare-text 的 serve.js（127.0.0.1:3180）并注册 /compare-text-meta；界面展示由 dsh-tokensave 项目中心发起，本插件不再注册任何入口",
+  "version": "0.3.0",
   "type": "module",
   "main": "index.js",
   "exports": {

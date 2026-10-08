@@ -1,69 +1,48 @@
 # dsh-compare-text
 
-把 compare-text 文本对比工具嵌入 DeepSeek Harness Web GUI 的本地私有插件。
+把 compare-text 文本对比工具接入 DeepSeek Harness 的本地私有插件。
+
+> **2026-10-07 调整**：本插件现在**只保留服务端半侧**，不再注册任何界面入口。
+> compare-text 的展示统一由 **dsh-tokensave 项目中心**发起——在项目中心里点
+> compare-text 卡片的「展示」按钮，即以 iframe 在 DSH 内呈现对比工具（项目中心的内嵌视图）。
+> 原来那两处入口（输入框/侧边栏浮层按钮、dsh-worktable「控制室」项目卡片）
+> 都已移除。
 
 - **不发布**：只安装到本机 `web` profile，不涉及 npm / GitHub 公开。
 - **仅本机访问**：插件自动启动项目自带的 `serve.js`，只绑定 `127.0.0.1`。
-- **零改动**：不修改 compare-text 的任何源码，直接复用现有前端与 API。
+- **零改动**：不修改 compare-text 的任何前端源码，直接复用现有前端与 API。
 
-## 效果
+## 这个插件现在做什么
 
-DSH Web GUI 里出现 **「文本对比」** 入口，有两种打开方式，**可同时并存**：
+1. **启动静态服务器**：DSH 启动时自动拉起 `node serve.js <port>`（`HOST=127.0.0.1`，
+   默认端口 `3180`）；若端口已被占用（例如你手动跑过 `serve.js`），则复用现有实例，
+   不会重复启动。DSH 退出时插件会停掉自己拉起的进程。
+2. **注册地址查询路由**：在宿主的 webserver 上注册同源 `GET /compare-text-meta`，
+   返回对比工具的实际 URL（`{ ok, url, port }`）。
+3. **不注册任何 UI 入口**：`lib/client.js` 是一个空 `apply`，只维持
+   `__ModuleLoader__` 握手（模块能正常加载），不往任何 slot 注入内容。
 
-1. **dsh-worktable 工作台卡片（新）**：左侧边栏「工作台」区块出现「文本对比」
-   项目卡片，点击后在分栏工作区的 **「浏览器」窗** 内直接渲染对比工具前端 UI
-   （右侧仍保留对话窗）。这是针对 dsh-worktable 插件的适配集成。
-2. **旧版浮层入口（保留）**：聊天输入框工具行 / 悬浮按钮等旧入口，点击后在
-   界面内弹出全屏浮层（iframe 加载对比工具），可关闭。
+## 界面从哪来（新版流程）
 
-关闭 DSH 时，插件自动停止它拉起的静态服务器。
+compare-text 作为「项目」登记进 **dsh-tokensave 项目中心**后：
 
-### 工作台卡片细节（新增）
+1. 打开任意会话 → 左侧边栏「项目中心」→ 找到 compare-text 卡片；
+2. 点卡片上的 **「展示」** 按钮 → 项目中心的视图切为对比工具（iframe 全幅加载）；
+   工具条上有「刷新 / 新窗口 / ← 返回」。
 
-- 卡片走 dsh-worktable 的入驻协议：注册到 `sidebar.worktable.project` 子座位，
-  项目 id 为 `compare-text`；
-- 点击卡片 → 调用工作台下发的 `openSplit(LayoutSpec)` 打开分栏工作区，主行
-  一个「浏览器」窗（`builtin browser`），地址自动填好对比工具 URL（来自同源
-  `/compare-text-meta`，失败回退 `http://127.0.0.1:3180/`）；
-- 支持工作台的改名 / 图标更换 / 排序 / 搜索过滤 / 隐藏（owner props
-  `nameOverrides` / `iconOverrides` / `order` / `query` / `hidden`）；
-- 若工作台未安装（子座位永不出现）或 `openSplit` 不可用，卡片自动回退为旧版
-  全屏浮层，功能不丢；
-- 通过 `cordis.patch.yml` 的 `config.worktable: false` 可关闭卡片（旧入口不受影响）。
-
-### 入口样式（可配置）
-
-默认入口在**聊天输入框工具行**（发送键旁的小图标 `⇄`，最融入原生界面）。
-也可在 `cordis.patch.yml` 的 `config.entry` 切换，改完重启 DSH 生效：
-
-| entry | 位置 | 插槽 |
-| ----- | ---- | ---- |
-| `input-right`（默认） | 聊天输入框工具行右侧（发送键旁） | `conversation.input.right` |
-| `input-left` | 聊天输入框工具行左侧 | `conversation.input.left` |
-| `fab` | 右下角圆形悬浮按钮 | `shell.overlay` |
-| `dock` | 输入框上方全宽 dock 条 | `conversation.input.dock` |
-| `footer` | 左侧边栏底部（设置按钮旁） | `sidebar.footer.action` |
-
-```yaml
-# cordis.patch.yml
-- insert:
-    - id: dsh-compare-text
-      name: dsh-compare-text
-      config:
-        port: 3180
-        entry: fab      # ← 换入口样式
-        worktable: true # ← 工作台卡片开关（默认开；false 关闭）
-```
+地址来源：tokensave 的 `project-info` 路由读项目 `package.json` 的
+**`previewUrl`**（本仓库根 `package.json` 已声明 `http://127.0.0.1:3180/`），
+再探测端口是否在监听。因此**插件与服务端两处的端口必须一致**：
+本插件 `cordis.patch.yml` 的 `config.port` ⇄ 根 `package.json` 的 `previewUrl`。
 
 ## 目录结构
 
 ```
 plugins/dsh-compare-text/
-├── package.json      # dsh.bundle（配置层）+ dsh.client（Web UI bundle）声明
-├── cordis.patch.yml  # 把插件行插入 profile 配置树（含 entry 入口样式 + worktable 开关）
+├── package.json      # dsh.bundle（配置层）+ dsh.client（Web 握手，空入口）
+├── cordis.patch.yml  # 把插件行插入 profile 配置树（含端口）
 ├── index.js          # 服务端半侧：拉起 serve.js + 注册 /compare-text-meta
-└── lib/client.js     # 客户端半侧：旧入口（input-left/right/fab/dock/footer）+
-                      # 工作台项目卡片（sidebar.worktable.project 子座位）
+└── lib/client.js     # 客户端半侧：空 apply（不注册任何 slot）
 ```
 
 ## 安装（一次）
@@ -83,9 +62,8 @@ dsh plugin --profile web add E:\code\compare-text\plugins\dsh-compare-text
 2. 因为包声明了 `dsh.bundle.patch`，自动把它加入该 profile 的
    `dsh.profile.bundles` 配置层列表。
 
-> 安装的是本地路径（pnpm link），以后改了插件代码无需重装。
-> 相对路径也可：`cd E:\code\compare-text` 后执行
-> `dsh plugin --profile web add .\plugins\dsh-compare-text`。
+> 安装的是本地路径（pnpm link），以后改了插件代码无需重装（重启 `dsh web` 生效）。
+> 相对路径也可：`cd E:\code\compare-text` 后执行 `dsh plugin --profile web add .\plugins\dsh-compare-text`。
 
 ## 验证
 
@@ -100,21 +78,13 @@ dsh --profile web --dump-config | findstr /i "compare-text"
 1. **重启** DSH：`dsh web`（或你平时启动 GUI 的方式）。插件在启动时自动拉起
    `node serve.js 3180`（仅 127.0.0.1）。
 2. 打开 `http://127.0.0.1:3080`，进入任意会话。
-3. **工作台方式（新）**：左侧边栏找到「工作台」区块（需已安装
-   [dsh-worktable](https://github.com/Aisland-SJL/dsh-worktable)），点击
-   **文本对比** 项目卡片，分栏工作区的「浏览器」窗内直接渲染对比工具。
-4. **旧版方式（保留）**：点击 **文本对比** 入口（位置取决于 `config.entry`，
-   默认在输入框工具行发送键旁），浮层内即是对比工具；`Esc` 或右上角
-   **关闭 ✕** 退出。
+3. 侧边栏 **「项目中心」** → compare-text 卡片 → **「展示」** → iframe 内即是对比工具。
 
 ## 配置
 
-- 端口：在 `cordis.patch.yml` 的 `config.port` 修改（默认 3180）。若该端口
-  已被占用，插件会复用现有实例而不重复启动。
-- 入口样式：在 `cordis.patch.yml` 的 `config.entry` 修改（默认 `input-right`），
-  可选 `input-right` / `input-left` / `fab` / `dock` / `footer`。
-- 工作台卡片：在 `cordis.patch.yml` 的 `config.worktable` 修改（默认 `true`），
-  设 `false` 关闭 dsh-worktable 里的项目卡片（旧入口不受影响）。
+- 端口：在 `cordis.patch.yml` 的 `config.port` 修改（默认 3180）；
+  同时把 compare-text 根 `package.json` 的 `previewUrl` 改成同一端口。
+  端口被占用时插件会复用现有实例而不重复启动。
 - 项目根目录：默认按插件包位置推导（`plugins/dsh-compare-text` 的上两级）；
   也可设置环境变量 `COMPARE_TEXT_ROOT` 指向项目根目录。
 

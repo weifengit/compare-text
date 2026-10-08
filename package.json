@@ -4,6 +4,8 @@
   "private": true,
   "description": "离线文本对比工具（浏览器 / Tauri 桌面双模式）",
   "license": "Apache-2.0",
+  "previewUrl": "http://127.0.0.1:3180/",
+  "previewUrlNote": "供 DSH 插件（如 dsh-tokensave 项目中心）的「展示」按钮在 DSH 内 iframe 打开本工具；需与 plugins/dsh-compare-text/cordis.patch.yml 的 config.port 一致",
   "scripts": {
     "start": "node serve.js",
     "test": "node test/smoke.js && node test/integration.js && node test/ui-init.js && node test/combobox.js && node test/report.js && node test/dsh-report.js",

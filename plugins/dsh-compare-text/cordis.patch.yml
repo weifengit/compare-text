@@ -1,21 +1,16 @@
 # dsh-compare-text bundle patch: insert the plugin row into the profile tree.
-# The server half (index.js) starts the compare-text static server on
-# 127.0.0.1 and registers /compare-text-meta; the package's dsh.client
-# declaration makes lib/client.js available to the Web GUI module system.
+#
+# 现状（2026-10-07 调整）：本插件只保留**服务端半侧**——
+#   index.js 在 DSH 启动时拉起 127.0.0.1:<port> 的 compare-text serve.js，
+#   并注册同源 GET /compare-text-meta。
+# 客户端里那两处界面入口（输入框/footer 浮层入口、dsh-worktable 项目卡片）
+# 都已移除，见 lib/client.js 顶部说明；compare-text 的展示改由 dsh-tokensave
+# 项目中心的「展示」按钮以 iframe 内嵌呈现（地址来自本项目 package.json
+# 的 previewUrl，由 tokensave 的 project-info 路由读取）。
 - insert:
     - id: dsh-compare-text
       name: dsh-compare-text
       config:
+        # compare-text 静态服务器端口（仅 127.0.0.1；被占用则复用现有实例）。
+        # 需与 compare-text 根 package.json 的 previewUrl 保持一致。
         port: 3180
-        # 入口样式（改完重启 dsh web 生效）：
-        #   input-right  聊天输入框工具行右侧小图标（默认，最融入原生界面）
-        #   input-left   聊天输入框工具行左侧小图标
-        #   fab          右下角圆形悬浮按钮
-        #   dock         输入框上方全宽 dock 条
-        #   footer       左侧边栏底部、设置按钮旁的小图标
-        entry: footer
-        # dsh-worktable（工作台）集成开关（默认开启）：
-        #   开启后，在工作台侧边栏区块里出现「文本对比」项目卡片，
-        #   点击即在工作台分栏工作区的「浏览器」窗内直接渲染对比工具。
-        #   设为 false 可关闭该卡片（旧入口模式始终保留）。
-        worktable: true

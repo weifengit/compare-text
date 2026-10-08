@@ -11,7 +11,7 @@
 | 集成点 | 位置 | 作用 |
 | ------ | ---- | ---- |
 | **Skill**（技能） | `.dsh/skills/compare-report/SKILL.md` | 让 DSH 里的 AI 具备「文本对比报告」能力：把自然语言对比需求转成任务 JSON，调用 `tools/dsh-report.js` 产出 HTML 报告 |
-| **Plugin**（插件） | `plugins/dsh-compare-text/` | 在 DSH Web GUI 加一个 **「文本对比」** 入口（默认在聊天输入框工具行发送键旁的小图标，可切换为悬浮球 / dock 条 / 侧栏按钮），点击后界面内弹出全屏浮层（iframe 加载对比工具），并自动拉起仅本机访问的静态服务器 |
+| **Plugin**（插件） | `plugins/dsh-compare-text/` | 仅**服务端半侧**：自动拉起仅本机访问（`127.0.0.1:3180`）的静态服务器，并注册同源 `/compare-text-meta`。**不再注册任何界面入口**；compare-text 的展示由 **dsh-tokensave 项目中心**的「展示」按钮以 iframe 呈现（地址来自根 `package.json` 的 `previewUrl`） |
 
 两者相互独立，可以只装其中一个，也可以都装（推荐都装）：
 
@@ -27,7 +27,7 @@
 1. **Node.js**（含 npm）：`node -v`
 2. **pnpm**：`pnpm -v`（没有则 `npm i -g pnpm` 或 `corepack enable`）
 3. **DSH 本体**：`dsh -V`（没有则 `npm i -g @deepseek-ai/dsh`，这一步需要网络，只需一次）
-4. **Edge 或 Chrome**（可选，仅「生成报告」的无头截图需要；插件浮层本身不需要）
+4. **Edge 或 Chrome**（可选，仅「生成报告」的无头截图需要；项目中心的 iframe 展示本身不需要）
 
 > 如果新电脑**完全没有网络**（连 DSH 本体都装不了），见文末
 > [第 8 节「完全离线（无网络）的特殊情况」](#8-完全离线无网络的特殊情况)。
@@ -151,8 +151,9 @@ dsh --profile web --dump-config | grep -i compare
 
 1. 完全退出 DSH，然后重新启动 Web GUI：`dsh web`（或你平时启动的方式）。
 2. 打开 `http://127.0.0.1:3080`，进入任意会话。
-3. 点击 **「文本对比」** 入口（**默认**在聊天输入框工具行、发送键旁的小图标 `⇄`；
-   想换位置见下方「入口样式」），点击后界面内弹出全屏浮层，就是对比工具本身。
+3. 打开 **dsh-tokensave 项目中心**：进入任意会话 → 侧边栏 **「项目中心」** →
+   找到 compare-text 卡片 → 点 **「展示」** → 项目中心视图切换为对比工具（iframe 全幅加载）；
+   工具条上有「刷新 / 新窗口 / ← 返回」。插件本身不再提供任何独立入口。
 4. 插件启动时自动在 `127.0.0.1:3180` 拉起 `serve.js`（仅本机可访问）；
    若端口已被占用（比如你已手动跑过），插件直接复用现有实例，不会重复启动。
 5. 在对话里说「对比这两个文件夹的合同，出报告」，AI 会用
@@ -161,19 +162,10 @@ dsh --profile web --dump-config | grep -i compare
 > 端口可在 `plugins/dsh-compare-text/cordis.patch.yml` 的 `config.port` 改（默认 3180）。
 > 项目根目录默认按插件包位置推导，也可用环境变量 `COMPARE_TEXT_ROOT` 显式指定。
 
-### 入口样式（不想在输入框旁？可换）
+### 界面从哪里打开（不再有独立入口）
 
-插件入口默认在聊天输入框工具行右侧（最融入原生界面）。编辑
-`plugins/dsh-compare-text/cordis.patch.yml` 的 `config.entry` 即可切换，
-改完重启 DSH：
-
-| entry | 入口位置 |
-| ----- | -------- |
-| `input-right`（默认） | 聊天输入框工具行右侧，发送键旁的小图标 |
-| `input-left` | 聊天输入框工具行左侧 |
-| `fab` | 右下角圆形悬浮按钮 |
-| `dock` | 输入框上方全宽 dock 条 |
-| `footer` | 左侧边栏底部、设置按钮旁 |
+compare-text 作为「项目」登记进 **dsh-tokensave 项目中心**（侧边栏 →「项目中心」→ 添加项目），
+点该项目卡片上的 **「展示」** 即可在 DSH 内以 iframe 打开对比工具；插件本身没有可配的入口样式了。
 
 ---
 
@@ -218,8 +210,8 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\.dsh\skills\compare-report"   # Wi
 | 现象 | 原因 / 处理 |
 | ---- | ----------- |
 | `dsh: pnpm not found on PATH` | 没装 pnpm。`npm i -g pnpm` 或 `corepack enable` 后重试 |
-| 点「文本对比」按钮提示「后端未就绪」 | DSH 是在插件安装**之前**启动的，重启 DSH 即可；或确认项目根能找到 `serve.js`（必要时设 `COMPARE_TEXT_ROOT`） |
-| 浮层打开后 404 | `serve.js` 没起来或端口被别的程序占用。手动跑 `node serve.js 3180` 看报错；或在 `cordis.patch.yml` 里换端口 |
+| 点「展示」没反应（项目中心视图不切换） | 项目未启动或 `devUrl` 推为空：确认 `serve.js` 在 `3180` 监听，且根 `package.json` 的 `previewUrl` 指向该端口。DSH 在插件安装**之前**启动的，重启 DSH |
+| 项目中心「展示」打开后 404 | `serve.js` 没起来或端口被别的程序占用。手动跑 `node serve.js 3180` 看报错；或改 `cordis.patch.yml` 的 `config.port`（并同步根 `package.json` 的 `previewUrl`） |
 | `dsh --profile web --dump-config` 里看不到 `dsh-compare-text` | 插件没装上。重跑第 5 节命令，确认输出里有 `+ dsh-compare-text link:...` |
 | 生成报告报「缺浏览器」 | 报告需要 Edge/Chrome 做无头截图。装一个即可（第 2 节） |
 | 换了电脑后技能列表里没有 `compare-report` | 确认会话工作目录在项目内（4a），或做了全局安装（4b） |

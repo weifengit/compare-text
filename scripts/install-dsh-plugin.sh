@@ -82,7 +82,7 @@ fi
 echo ""
 echo "✅ 完成。下一步："
 echo "   1) 重启 DSH：dsh web"
-echo "   2) 打开 http://127.0.0.1:3080，聊天输入框工具行会出现「⇄ 文本对比」入口"
+echo "   2) 打开 http://127.0.0.1:3080 → 侧边栏「项目中心」→ compare-text 卡片 →「展示」（需 dsh-tokensave）"
 echo "   3) 对话里说「对比这两个文件夹的合同，出报告」即可用 compare-report 技能"
 echo ""
 echo "卸载：dsh plugin --profile $PROFILE remove dsh-compare-text && rm -rf $DSH_HOME/skills/compare-report"

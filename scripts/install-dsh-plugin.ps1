@@ -94,7 +94,7 @@ if ($Mode -eq "all" -or $Mode -eq "plugin") {
 Write-Host ""
 Write-Host "✅ 完成。下一步：" -ForegroundColor Green
 Write-Host "   1) 重启 DSH：dsh web"
-Write-Host "   2) 打开 http://127.0.0.1:3080，聊天输入框工具行会出现「⇄ 文本对比」入口"
+Write-Host "   2) 打开 http://127.0.0.1:3080 → 侧边栏「项目中心」→ compare-text 卡片 →「展示」（需 dsh-tokensave）"
 Write-Host "   3) 对话里说「对比这两个文件夹的合同，出报告」即可用 compare-report 技能"
 Write-Host ""
 Write-Host "卸载：dsh plugin --profile $Profile remove dsh-compare-text ; Remove-Item -Recurse -Force $DshHome\skills\compare-report"
