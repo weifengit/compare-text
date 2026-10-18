@@ -798,6 +798,78 @@ function t31() {
   });
 }
 
+function t32() {
+  // 用户明确要求的两条导出格式：
+  //   ① 表头行高要合适（内容自动换行、水平居中、垂直居中）
+  //   ② 所有字段的列宽使用源文件的原始列宽
+  // 回归点：曾经 applyMeta 按"位置顺序"写列宽，而「修改」表中间插入了 旧_xxx 列，
+  // 导致从插入点起整列错位（旧_数量 拿到了 单价 的宽度、后面的列全是 null）。
+  var ExcelJS2 = require('../lib/exceljs.min.js');
+  var wb = new ExcelJS2.Workbook();
+  return wb.xlsx.load(fs.readFileSync(tmpFile('report.xlsx'))).then(function () {
+    // 源表列宽（t8 造数据时设的是 [16,12,14,18,9]）
+    var SRC = [16, 12, 14, 18, 9.0001];
+
+    ['生产数据_新增', '生产数据_修改', '生产数据_删除'].forEach(function (name) {
+      var ws = wb.getWorksheet(name);
+      assert.ok(ws, '缺少分表 ' + name);
+
+      // ① 表头对齐：自动换行 + 水平居中 + 垂直居中
+      for (var c = 1; c <= ws.columnCount; c++) {
+        var al = ws.getRow(1).getCell(c).alignment || {};
+        assert.strictEqual(al.wrapText, true, name + ' 第' + c + '列表头未开自动换行');
+        assert.strictEqual(al.horizontal, 'center', name + ' 第' + c + '列表头未水平居中');
+        assert.strictEqual(al.vertical, 'middle',
+          name + ' 第' + c + '列表头未垂直居中，实际 ' + al.vertical);
+      }
+
+      // ② 表头行高必须够（不能是默认 15 那种压扁状态）
+      var h = ws.getRow(1).height;
+      assert.ok(h && h >= 18, name + ' 表头行高过小：' + h);
+
+      // ③ 数据列（有源列对应的）必须等于源文件列宽
+      var hdrs = [];
+      for (var i = 1; i <= ws.columnCount; i++) hdrs.push(ws.getRow(1).getCell(i).value);
+      var SRC_NAMES = ['提取方式', '执行标准', '生产日期', '提取物批号', '指标成分'];
+      SRC_NAMES.forEach(function (nm, si) {
+        var pos = hdrs.indexOf(nm);
+        if (pos < 0) return;                      // 该表可能不含此列（如删除表用旧表头）
+        // 该列宽度必须是"有值"的：为空说明 colMap 没映射到源列
+        // （元信息列在最后，不参与本段校验）
+        var w = ws.getColumn(pos + 1).width;
+        assert.ok(w !== null && w !== undefined,
+          name + ' 列「' + nm + '」宽度为空；全部列宽=' + JSON.stringify(
+            (function () { var a = []; for (var q = 1; q <= ws.columnCount; q++) a.push(ws.getColumn(q).width); return a; })()) +
+          '；表头=' + JSON.stringify(hdrs));
+        assert.ok(Math.abs(w - SRC[si]) < 1.5,
+          name + ' 列「' + nm + '」宽度应≈' + SRC[si] + '，实际 ' + w);
+      });
+
+      // ④ 旧_xxx 列必须与其原列同宽（源文件里没有这一列，靠映射继承）
+      hdrs.forEach(function (hname, idx) {
+        if (String(hname).indexOf('旧_') !== 0) return;
+        var baseName = String(hname).slice(2);
+        var basePos = hdrs.indexOf(baseName);
+        if (basePos < 0) return;                  // 结构变化列（原表已没有该列）
+        var wOld = ws.getColumn(idx + 1).width;
+        var wBase = ws.getColumn(basePos + 1).width;
+        assert.ok(wOld !== null && wOld !== undefined,
+          name + ' 「' + hname + '」宽度为空');
+        // 两者都映射到同一个源列，宽度应一致（极小的浮点差异容忍）
+        assert.ok(Math.abs(wOld - wBase) < 0.01,
+          name + ' 「' + hname + '」应与「' + baseName + '」同宽，实际 ' + wOld + ' vs ' + wBase);
+      });
+
+      // ⑤ 不应残留空宽度列（曾出现尾部 null）
+      for (var k = 1; k <= ws.columnCount; k++) {
+        var cw = ws.getColumn(k).width;
+        assert.ok(cw !== null && cw !== undefined,
+          name + ' 第 ' + k + ' 列宽度为空，表头为「' + hdrs[k - 1] + '」');
+      }
+    });
+  });
+}
+
 // ---- 跑 ----
 // 用 check() 统一串起来：每个用例独立记 ok/FAIL，任何一个失败不影响后面的用例继续跑
 // （早期版本把所有用例串成一条 Promise 链，第一个失败就会中断，看不到后续结果）。
@@ -833,7 +905,8 @@ var CASES = [
   ['回归：宽表每行列数受限 + 折叠提示', t28],
   ['回归：切 sheet 联动主区域3（onSheetChange）', t29],
   ['回归：仅单侧存在的 sheet 有明确提示', t30],
-  ['报告：修改表保留全部列，旧值紧随原列，行号置末', t31]
+  ['报告：修改表保留全部列，旧值紧随原列，行号置末', t31],
+  ['报告：表头居中换行且行高合适，列宽沿用源文件', t32]
 ];
 
 // ★ 先等 ready（造临时 xlsx）落地，否则后面的读取用例会 ENOENT

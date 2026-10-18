@@ -356,8 +356,12 @@
       // ExcelJS 的默认列宽是 9；恰好等于 9 时写回去会被判为"非自定义"而丢 `<cols>`，
       // 故这里把 9 抬高一丁点，保证源文件显式设置的 9 能真正写进报告。
       var w = col.width;
-      if (typeof w === 'number' && Math.abs(w - 9) < 1e-9) w = 9.0001;
-      colWidths.push(typeof w === 'number' ? w : null);
+      // ExcelJS 把「恰等于默认值 9」视为未自定义 → <cols> 里不写出 → 读回来是 undefined。
+      // 这类列在源文件里其实是有宽度的（就是默认的 9），所以要用 9 而不是 null，
+      // 否则导出的报告会丢掉这些列的宽度、被 Excel 按默认宽度重排。
+      if (typeof w !== 'number') w = 9;
+      if (Math.abs(w - 9) < 1e-9) w = 9.0001;   // 抬高一丁点，保证写回时能写出 <cols>
+      colWidths.push(w);
       colHidden.push(!!col.hidden);
     }
     for (var hc = 1; hc <= nCol; hc++) {

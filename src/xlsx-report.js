@@ -59,10 +59,12 @@
    * meta = { colWidths, colHidden, headerStyles, rowHeights, freeze, merges }
    * colOffset = 目标 sheet 前面多出的列数（如"新文件行号"占 1 列）
    */
-  function applyMeta(ws, meta, colOffset, headerRowCount, maxCols) {
+  function applyMeta(ws, meta, colOffset, headerRowCount, maxCols, colMap) {
     if (!meta) return;
     colOffset = colOffset || 0;
     headerRowCount = headerRowCount || 1;
+    // colMap: { 目标列号(1基): 源列索引(0基) }。给了它就按名字精确映射，
+    // 因为「修改」表在中间插入了 旧_xxx 列，按位置顺序写会从插入点开始整体错位。
 
     // 列宽 / 隐藏：注意 ExcelJS 里 width 恰为默认值 9 时不会写出 <cols>，
     // XlsxIO 抽元数据时已把 9 抬成 9.0001，这里直接写即可。
@@ -74,23 +76,42 @@
     // 不能用 ws.columnCount：一旦 getCell 访问到更右的列它就会被抬高。
     // maxCols 是目标 sheet 的**绝对**列数（含偏移），由调用方按 headers.length 传入。
     var maxCol = maxCols || ws.columnCount || 0;
-    for (var i = 0; i < widths.length; i++) {
-      var colNo = i + 1 + colOffset;
-      if (maxCol && colNo > maxCol) break;
-      var col = ws.getColumn(colNo);
-      if (typeof widths[i] === 'number' && widths[i] > 0) col.width = widths[i];
-      if (hidden[i]) col.hidden = true;
+    if (colMap) {
+      // 精确映射：目标列号 → 源列索引
+      Object.keys(colMap).forEach(function (targetColNo) {
+        var srcIdx = colMap[targetColNo];
+        var w = widths[srcIdx];
+        if (typeof w === 'number' && w > 0) ws.getColumn(parseInt(targetColNo, 10)).width = w;
+        if (hidden[srcIdx]) ws.getColumn(parseInt(targetColNo, 10)).hidden = true;
+      });
+    } else {
+      for (var i = 0; i < widths.length; i++) {
+        var colNo = i + 1 + colOffset;
+        if (maxCol && colNo > maxCol) break;
+        var col = ws.getColumn(colNo);
+        if (typeof widths[i] === 'number' && widths[i] > 0) col.width = widths[i];
+        if (hidden[i]) col.hidden = true;
+      }
     }
 
     // 表头样式：同列宽一样受 maxCol 限制，否则按源文件列数写样式会把目标
     // sheet 的列数抬高（例如"修改"表只输出 5 列，却因源有 5 列 + 偏移 3 而被撑到 8 列）。
     var hStyles = meta.headerStyles || [];
-    for (var c = 0; c < hStyles.length; c++) {
-      if (!hStyles[c]) continue;
-      var styleCol = c + 1 + colOffset;
-      if (maxCol && styleCol > maxCol) break;
-      var cell = ws.getRow(1).getCell(styleCol);
-      try { cell.style = hStyles[c]; } catch (e) { /* 样式结构异常时忽略，不影响数据 */ }
+    if (colMap) {
+      Object.keys(colMap).forEach(function (targetColNo) {
+        var srcIdx = colMap[targetColNo];
+        if (!hStyles[srcIdx]) return;
+        var cellM = ws.getRow(1).getCell(parseInt(targetColNo, 10));
+        try { cellM.style = hStyles[srcIdx]; } catch (e) { /* 忽略 */ }
+      });
+    } else {
+      for (var c = 0; c < hStyles.length; c++) {
+        if (!hStyles[c]) continue;
+        var styleCol = c + 1 + colOffset;
+        if (maxCol && styleCol > maxCol) break;
+        var cell = ws.getRow(1).getCell(styleCol);
+        try { cell.style = hStyles[c]; } catch (e) { /* 样式结构异常时忽略，不影响数据 */ }
+      }
     }
 
     // 行高（按表头行序号映射）
@@ -109,26 +130,102 @@
     }
   }
 
+  /**
+   * 分表收尾：给没有源列可参照的元信息列定宽，并按表头实际内容抬行高。
+   * metaCols: [{index(1基), values:[...]}]  仅元信息列（行号/变化情况）
+   */
+  function finalizeSheet(ws, headers, metaCols) {
+    // 1) 元信息列按内容估算宽度
+    (metaCols || []).forEach(function (mc) {
+      var w = autoColWidth(mc.values);
+      ws.getColumn(mc.index).width = w;
+    });
+
+    // 2) 收集最终列宽（供行高估算）
+    var widths = [];
+    for (var c = 0; c < headers.length; c++) {
+      var col = ws.getColumn(c + 1);
+      widths.push(typeof col.width === 'number' && col.width > 0 ? col.width : 9);
+    }
+
+    // 3) 表头行高：按内容自适应。源文件的行高只是参考下限，
+    //    因为报告的表头可能更长（如「公共列 / 提取物批号」「旧_指标成分」）。
+    var srcH = ws.getRow(1).height || 0;
+    var needH = estimateHeaderHeight(ws, headers, widths, 15);
+    ws.getRow(1).height = Math.max(needH, srcH || 0, 18);
+  }
+
   /** 特殊列样式：行号 / 变化情况 —— 黄底 + 粗体 + 边框 + 居中 */
   function styleSpecialCol(ws, colIndex, numDataRows) {
     var h = ws.getRow(1).getCell(colIndex);
     h.fill = fillOf(SPECIAL_HEADER_FILL);
     h.font = { bold: true, size: 10 };
     h.border = border();
-    h.alignment = { horizontal: 'center', vertical: 'center', wrapText: true };
+    // 用 'middle' 而不是 'center'：ExcelJS 的 vertical 合法值是 top/middle/bottom，
+    // 写成 'center' 会被丢弃（表现为该格没有 vertical），表头就对不齐了。
+    h.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     for (var r = 2; r <= numDataRows + 1; r++) {
       var c = ws.getRow(r).getCell(colIndex);
       c.border = border();
-      c.alignment = { horizontal: 'center', vertical: 'center' };
+      c.alignment = { horizontal: 'center', vertical: 'middle' };
     }
   }
 
-  /** 表头行统一：自动换行 + 居中 + 顶端对齐 */
+/** 表头行统一：自动换行 + 水平居中 + 垂直居中 */
   function styleHeaderRow(ws, fromCol, toCol) {
     for (var c = fromCol; c <= toCol; c++) {
       var cell = ws.getRow(1).getCell(c);
-      cell.alignment = { horizontal: 'center', vertical: 'top', wrapText: true };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     }
+  }
+
+  /** 列名去掉「父 / 」前缀后的末段（估算宽度时用，避免把长前缀算进列宽） */
+  function shortColName(name) {
+    var s = String(name == null ? '' : name);
+    var i = s.lastIndexOf(' / ');
+    return i >= 0 ? s.slice(i + 3) : s;
+  }
+
+  /**
+   * 按内容估算列宽（供没有源列可参照的元信息列用）。
+   * Excel 列宽单位≈字符数；中文按 2 个字符宽算，再加一点边距。
+   */
+  function autoColWidth(values) {
+    var maxLen = 0;
+    for (var i = 0; i < values.length; i++) {
+      var s = values[i] === null || values[i] === undefined ? '' : String(values[i]);
+      var len = 0;
+      for (var j = 0; j < s.length; j++) {
+        len += s.charCodeAt(j) > 255 ? 2 : 1;   // 中文/全角按 2 计
+      }
+      if (len > maxLen) maxLen = len;
+    }
+    return Math.max(8, Math.min(maxLen + 2.5, 60));
+  }
+
+  /**
+   * 估算表头行需要的高度：按每列"换行后最多几行"× 行高，
+   * 因为表头统一开启了 wrapText，内容长的表头若不抬高度就会被压成一条、看不清。
+   * colWidths: 与列一一对应的最终列宽（字符数）。
+   */
+  function estimateHeaderHeight(ws, headers, colWidths, baseLineHeight) {
+    var lineH = baseLineHeight || 15;
+    var maxLines = 1;
+    for (var i = 0; i < headers.length; i++) {
+      var text = headers[i] === null || headers[i] === undefined ? '' : String(headers[i]);
+      var w = colWidths[i] || 10;
+      // 可用宽度按列宽减一点内边距
+      var usable = Math.max(2, w - 1);
+      // 逐"字"累计宽度来估算换行数（中文 2、西文 1）
+      var lines = 1, cur = 0;
+      for (var j = 0; j < text.length; j++) {
+        var chW = text.charCodeAt(j) > 255 ? 2 : 1;
+        if (cur + chW > usable) { lines++; cur = chW; }
+        else cur += chW;
+      }
+      if (lines > maxLines) maxLines = lines;
+    }
+    return Math.max(18, maxLines * lineH + 4);   // 上下各留 2px 内边距
   }
 
   /**
@@ -147,9 +244,15 @@
       row.push(item.newRow);
       ws.addRow(row);
     });
-    applyMeta(ws, meta, 0, 1, headers.length);
+    // 数据列按名字映射到源列；末尾的「新文件行号」在源表里没有对应列，不映射
+    var addMap = {};
+    r.headers.forEach(function (h, i) { addMap[i + 1] = i; });
+    applyMeta(ws, meta, 0, 1, headers.length, addMap);
     styleHeaderRow(ws, 1, headers.length);
     styleSpecialCol(ws, headers.length, r.added.length);
+    finalizeSheet(ws, headers, [
+      { index: headers.length, values: ['新文件行号'].concat(r.added.map(function (x) { return x.newRow; })) }
+    ]);
   }
 
   /**
@@ -219,12 +322,36 @@
       ws.addRow(row);
     });
 
-    applyMeta(ws, meta, 0, 1, headers.length);
+    // 建立「目标列号 → 源列索引」的精确映射：
+    // 数据列按名字对上源列；旧_xxx 列沿用其原列的源索引（保证同宽）；
+    // 元信息列与"只在旧文件里的列"没有源列，不参与映射（后面按内容定宽）。
+    var srcIdxOf = {};
+    baseHeaders.forEach(function (h, i) { srcIdxOf[h] = i; });
+    var colMap = {};
+    layout.forEach(function (x, i) {
+      var colNo = i + 1;
+      if (x.kind === 'new') {
+        if (srcIdxOf[x.col] !== undefined) colMap[colNo] = srcIdxOf[x.col];
+      } else if (x.kind === 'old') {
+        if (srcIdxOf[x.col] !== undefined) colMap[colNo] = srcIdxOf[x.col];
+      }
+    });
+
+    applyMeta(ws, meta, 0, 1, headers.length, colMap);
     styleHeaderRow(ws, 1, headers.length);
 
     // 元信息三列用特殊列样式（黄底），且位于末尾
     var metaStart = layout.length + 1;
     for (var k = 0; k < META.length; k++) styleSpecialCol(ws, metaStart + k, r.modified.length);
+
+    // 元信息三列没有源列可参照，按内容定宽；表头按内容抬行高
+    finalizeSheet(ws, headers, [
+      { index: metaStart, values: ['变化情况'].concat(r.modified.map(function (m) {
+          return '修改：' + (m.changedCols || []).filter(function (c) { return c.indexOf('旧_') !== 0; }).join('、');
+        })) },
+      { index: metaStart + 1, values: ['新文件行号'].concat(r.modified.map(function (m) { return m.newRow; })) },
+      { index: metaStart + 2, values: ['旧文件行号'].concat(r.modified.map(function (m) { return m.oldRow; })) }
+    ]);
 
     // 变化列与其 旧_ 列成对高亮：一眼看出哪几列动过
     var pairIdx = 0;
@@ -240,8 +367,8 @@
         hc.fill = fillOf(color);
         hc.font = { bold: true, size: 10 };
         hc.border = border();
-        var w = ws.getColumn(colNo).width;
-        ws.getColumn(colNo).width = Math.max((w || 12) * 1.2, 14);
+        // 列宽沿用源文件（applyMeta 已写入），这里不再放大：
+        // 用户要求「所有字段的列宽使用原来的列宽」，强行加宽会与源文件对不上。
         for (var rr = 2; rr <= r.modified.length + 1; rr++) {
           var cc = ws.getRow(rr).getCell(colNo);
           cc.fill = fillOf(color);
@@ -275,9 +402,15 @@
       row.push(item.oldRow);
       ws.addRow(row);
     });
-    applyMeta(ws, meta, 0, 1, headers.length);
+    // 数据列按名字映射到**旧**源列；末尾的「旧文件行号」无源列，不映射
+    var delMap = {};
+    oldHeaders.forEach(function (h, i) { delMap[i + 1] = i; });
+    applyMeta(ws, meta, 0, 1, headers.length, delMap);
     styleHeaderRow(ws, 1, headers.length);
     styleSpecialCol(ws, headers.length, r.deleted.length);
+    finalizeSheet(ws, headers, [
+      { index: headers.length, values: ['旧文件行号'].concat(r.deleted.map(function (x) { return x.oldRow; })) }
+    ]);
     // 删除行整体浅红底：一眼可辨（数据列从第 1 列开始，行号列在最后不涂）
     for (var rr = 2; rr <= r.deleted.length + 1; rr++) {
       for (var cc = 1; cc < headers.length; cc++) {
