@@ -420,18 +420,18 @@
   }
 
   /**
-   * 综合变更 sheet（{sheet}_变更汇总）：把新增/修改/删除三类合并到一张表。
+   * 综合变更 sheet（{sheet}_变更汇总）：把新增/修改/删除/未变化四类合并到一张表。
    *
    * 横向列结构（键列排最前，之后所有源表列，末尾元信息）：
    *   类别 | 键列… | 全部源列… | 新文件行号 | 旧文件行号 | 变化情况
    *
-   * 三方分类用背景色醒目区分（与页面三视图配色一致）：
-   *   新增 = 浅绿、删除 = 浅红、修改 = 浅蓝。
+   * 四类记录用背景色醒目区分（变更三类与页面三视图配色一致）：
+   *   新增 = 浅绿、删除 = 浅红、修改 = 浅蓝、未变化 = 中性浅灰。
    *   修改里被改过的单元格显示「旧值 → 新值」，加粗 + 更深强调色。
    *   键列不跟随分类染色（保持中性底 + 加粗），行能对得上含义。
    */
   function addChangeSummarySheet(wb, r, meta) {
-    var CAT_ADD = '新增', CAT_MOD = '修改', CAT_DEL = '删除';
+    var CAT_ADD = '新增', CAT_MOD = '修改', CAT_DEL = '删除', CAT_SAME = '未变化';
     var nAdded = r.added.length, nModified = r.modified.length, nDeleted = r.deleted.length;
     if (!nAdded && !nModified && !nDeleted) return;
 
@@ -440,10 +440,12 @@
     CAT_FILL[CAT_ADD] = 'FFE7F8EE';   // 浅绿
     CAT_FILL[CAT_MOD] = 'FFE6F0FF';   // 浅蓝
     CAT_FILL[CAT_DEL] = 'FFFFEEF0';   // 浅红
+    CAT_FILL[CAT_SAME] = 'FFF5F5F5';  // 中性浅灰（未变化）
     var CAT_TEXT = {};
     CAT_TEXT[CAT_ADD] = 'FF2E7D32';
     CAT_TEXT[CAT_MOD] = 'FF1565C0';
     CAT_TEXT[CAT_DEL] = 'FFC62828';
+    CAT_TEXT[CAT_SAME] = 'FF9E9E9E';  // 弱化：未变化不抢视线
     // 修改单元格「旧值 → 新值」强调色
     var CHG_FILL = 'FFFFF3CC';        // 深黄
     var CHG_TEXT = 'FFE65100';
@@ -480,6 +482,13 @@
       row.push('', item.oldRow, '删除');
       ws.addRow(row);
     }
+    function pushUnchanged(u) {
+      catArr.push(CAT_SAME);
+      var row = [CAT_SAME];
+      layout.forEach(function (x) { row.push(safeVal(u.cells[x.header])); });
+      row.push(u.newRow, u.oldRow, '未变化');
+      ws.addRow(row);
+    }
     function pushModified(m) {
       catArr.push(CAT_MOD);
       var changedSet = {};
@@ -509,6 +518,8 @@
     r.modified.forEach(pushModified);
     r.added.forEach(pushAdded);
     r.deleted.forEach(pushDeleted);
+    // 未变化行排在最后：变更记录保持最上方，未变化行用于补全全量上下文
+    (r.unchanged || []).forEach(pushUnchanged);
 
     // 列宽：键列/数据列沿用源文件；类别/元信息按内容的宽
     var srcIdxOf = {};
@@ -525,7 +536,7 @@
     styleSpecialCol(ws, metaStart + 1, nData);
     styleSpecialCol(ws, metaStart + 2, nData);
     finalizeSheet(ws, headers, [
-      { index: 1, values: ['类别', CAT_ADD, CAT_MOD, CAT_DEL] },
+      { index: 1, values: ['类别', CAT_ADD, CAT_MOD, CAT_DEL, CAT_SAME] },
       { index: metaStart, values: ['新文件行号'].concat(catArr.map(function () { return 1; })) },
       { index: metaStart + 1, values: ['旧文件行号'] },
       { index: metaStart + 2, values: ['变化情况'] }

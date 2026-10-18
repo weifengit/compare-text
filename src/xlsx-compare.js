@@ -260,6 +260,7 @@
 
       var added = [];
       var modified = [];
+      var unchanged = [];
       var deleted = [];
 
       // 新增 / 修改（按新表行序）
@@ -316,6 +317,13 @@
             allCells: cellsObj(newRows[nr], newHeaders),
             allOldCells: cellsObj(oldRow, oldHeaders)
           });
+        } else {
+          // 键匹配到但所有共同列完全一致 → 未变化记录，供「变更汇总」表展示
+          unchanged.push({
+            newRow: newNums[nr] || (nr + 1),
+            oldRow: oldNums[oi] || (oi + 1),
+            cells: cellsObj(newRows[nr], newHeaders)
+          });
         }
       }
 
@@ -334,6 +342,7 @@
         oldHeaders: oldHeaders,
         added: added,
         modified: modified,
+        unchanged: unchanged,
         deleted: deleted,
         structural: structural,
         autoKey: autoKey,
@@ -379,6 +388,7 @@
         oldHeaders: oldHeaders,
         added: added,
         modified: [],       // 哈希模式判不出"改了哪一列"
+        unchanged: [],      // 哈希模式按整行匹配，无法定位"未变行"身份
         deleted: deleted,
         structural: structural,
         autoKey: null,

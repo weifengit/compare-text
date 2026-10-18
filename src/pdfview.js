@@ -57,12 +57,22 @@
     // cMapUrl/standardFontDataUrl 必须为绝对 URL：pdf.js 在 Worker 线程里取 CMap/标准字体，
     // 相对路径会按 Worker 脚本位置（/lib/pdf.worker.min.js）解析成 /lib/lib/... → 404。
     var base = (W && W.location && W.location.origin) || '';
-    return {
-      url: url,
+    var extra = {
       cMapUrl: base + '/lib/cmaps/',
       cMapPacked: true,
       standardFontDataUrl: base + '/lib/standard_fonts/'
     };
+    // 参数对象也要支持：pdf.js 的 getDocument 接受 { data } / { url } / { range } 等参数对象，
+    // 而本函数开头就被声明为「接受 url」。把参数对象当成 url 值再包一层 url:
+    // 会触发 pdf.js "Invalid PDF url data"，用 { data } 加载字节型 PDF 的调用方全部失败。
+    // 页面路径（fileUrl → /api/file 字符串或 Blob URL 字符串）走下面 url: 分支，行为不变。
+    var isUrlLike = !url || typeof url !== 'object' || (root.URL && url instanceof root.URL);
+    if (!isUrlLike) {
+      for (var k in url) { if (Object.prototype.hasOwnProperty.call(url, k)) extra[k] = url[k]; }
+      return extra;
+    }
+    extra.url = url;
+    return extra;
   }
 
   /** 取消一侧全部在途渲染任务 */
