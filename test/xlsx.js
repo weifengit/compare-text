@@ -870,6 +870,81 @@ function t32() {
   });
 }
 
+function t33() {
+  // 综合变更 sheet（_变更汇总）：新增/修改/删除三类融合一张表，用背景色醒目区分；
+  // 修改行被改单元格显示「旧值 → 新值」并加粗强调；键列保持中性底。
+  var ExcelJS2 = require('../lib/exceljs.min.js');
+  var wb = new ExcelJS2.Workbook();
+  return wb.xlsx.load(fs.readFileSync(tmpFile('report.xlsx'))).then(function () {
+    var ws = wb.getWorksheet('生产数据_变更汇总');
+    assert.ok(ws, '应有综合变更 sheet');
+
+    // 表头：类别 在前，数据列随后，元信息在末尾
+    var hdrs = [];
+    for (var c = 1; c <= ws.columnCount; c++) hdrs.push(ws.getRow(1).getCell(c).value);
+    assert.strictEqual(hdrs[0], '类别', '第 1 列应是 类别，实际 ' + hdrs[0]);
+    var n = hdrs.length;
+    assert.strictEqual(hdrs[n - 3], '新文件行号');
+    assert.strictEqual(hdrs[n - 2], '旧文件行号');
+    assert.strictEqual(hdrs[n - 1], '变化情况');
+
+    // 三类都出现：新增/修改/删除 至少各一行
+    var cats = {};
+    for (var r = 2; r <= ws.rowCount; r++) {
+      var cV = ws.getRow(r).getCell(1).value;
+      cats[cV] = (cats[cV] || 0) + 1;
+    }
+    assert.ok(cats['新增'] > 0, '应含 新增 行');
+    assert.ok(cats['修改'] > 0, '应含 修改 行');
+    assert.ok(cats['删除'] > 0, '应含 删除 行');
+
+    // 自定义断言工具（兼容旧 Node）
+    function cellFill(rr, cc) {
+      var f = ws.getRow(rr).getCell(cc).fill;
+      return f && f.fgColor ? f.fgColor.argb : '';
+    }
+
+    // 找一条 修改 行（类别列=修改）
+    var modRow = null;
+    for (var q = 2; q <= ws.rowCount; q++) {
+      if (String(ws.getRow(q).getCell(1).value) === '修改') { modRow = q; break; }
+    }
+    assert.ok(modRow, '应有 修改 行');
+
+    // 修改行整行应是浅蓝底（类别的非键数据列）
+    // 取『指标成分』列位置 —— t8 造的修改数据里指标成分从 97 改到 975（见 t17）
+    var iIdx = hdrs.indexOf('指标成分');
+    assert.ok(iIdx >= 0, '应有 指标成分 列');
+    var chgCell = ws.getRow(modRow).getCell(iIdx + 1);
+    var chgVal = String(chgCell.value);
+    // 被改单元格应含  →  即「旧 → 新」；不应是纯新值
+    assert.ok(chgVal.indexOf(' → ') >= 0, '被改单元格应显示 旧值 → 新值，实际 ' + chgVal);
+
+    // 表示新旧分隔：两端都有内容
+    var arrow = chgVal.indexOf(' → ');
+    assert.ok(arrow > 0 && arrow < chgVal.length - 3, '→ 两端都应有值：' + chgVal);
+
+    // 新增行整行浅绿
+    // 删除行整行浅红
+    var foundAdd = false, foundDel = false;
+    for (var x = 2; x <= ws.rowCount; x++) {
+      var cat = String(ws.getRow(x).getCell(1).value);
+      // 该行第一个非键数据列（列 3）应有底色
+      var f3 = cellFill(x, 3);
+      if (cat === '新增') { foundAdd = true; assert.strictEqual(f3, 'FFE7F8EE', '新增行应为浅绿，实际 ' + f3); }
+      if (cat === '删除') { foundDel = true; assert.strictEqual(f3, 'FFFFEEF0', '删除行应为浅红，实际 ' + f3); }
+    }
+    assert.ok(foundAdd, '应有新增行');
+    assert.ok(foundDel, '应有删除行');
+
+    // 冻结：表头 + 类别列
+    var views = ws.views || [];
+    assert.ok(views.length && views[0].state === 'frozen', '综合 sheet 应冻结');
+    assert.ok(views[0].xSplit === 1, '应冻结第 1 列（类别）');
+    assert.ok(views[0].ySplit === 1, '应冻结第 1 行（表头）');
+  });
+}
+
 // ---- 跑 ----
 // 用 check() 统一串起来：每个用例独立记 ok/FAIL，任何一个失败不影响后面的用例继续跑
 // （早期版本把所有用例串成一条 Promise 链，第一个失败就会中断，看不到后续结果）。
@@ -906,7 +981,8 @@ var CASES = [
   ['回归：切 sheet 联动主区域3（onSheetChange）', t29],
   ['回归：仅单侧存在的 sheet 有明确提示', t30],
   ['报告：修改表保留全部列，旧值紧随原列，行号置末', t31],
-  ['报告：表头居中换行且行高合适，列宽沿用源文件', t32]
+  ['报告：表头居中换行且行高合适，列宽沿用源文件', t32],
+  ['报告：综合变更 sheet 融合三类并醒目配色', t33]
 ];
 
 // ★ 先等 ready（造临时 xlsx）落地，否则后面的读取用例会 ENOENT

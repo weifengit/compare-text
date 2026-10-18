@@ -420,6 +420,161 @@
   }
 
   /**
+   * 综合变更 sheet（{sheet}_变更汇总）：把新增/修改/删除三类合并到一张表。
+   *
+   * 横向列结构（键列排最前，之后所有源表列，末尾元信息）：
+   *   类别 | 键列… | 全部源列… | 新文件行号 | 旧文件行号 | 变化情况
+   *
+   * 三方分类用背景色醒目区分（与页面三视图配色一致）：
+   *   新增 = 浅绿、删除 = 浅红、修改 = 浅蓝。
+   *   修改里被改过的单元格显示「旧值 → 新值」，加粗 + 更深强调色。
+   *   键列不跟随分类染色（保持中性底 + 加粗），行能对得上含义。
+   */
+  function addChangeSummarySheet(wb, r, meta) {
+    var CAT_ADD = '新增', CAT_MOD = '修改', CAT_DEL = '删除';
+    var nAdded = r.added.length, nModified = r.modified.length, nDeleted = r.deleted.length;
+    if (!nAdded && !nModified && !nDeleted) return;
+
+    // 类别 → 整行底色 / 类别文字色（与页面三视图配色一致）
+    var CAT_FILL = {};
+    CAT_FILL[CAT_ADD] = 'FFE7F8EE';   // 浅绿
+    CAT_FILL[CAT_MOD] = 'FFE6F0FF';   // 浅蓝
+    CAT_FILL[CAT_DEL] = 'FFFFEEF0';   // 浅红
+    var CAT_TEXT = {};
+    CAT_TEXT[CAT_ADD] = 'FF2E7D32';
+    CAT_TEXT[CAT_MOD] = 'FF1565C0';
+    CAT_TEXT[CAT_DEL] = 'FFC62828';
+    // 修改单元格「旧值 → 新值」强调色
+    var CHG_FILL = 'FFFFF3CC';        // 深黄
+    var CHG_TEXT = 'FFE65100';
+
+    var catArr = [];   // 每行归属类别
+    var keySet = {};
+    (r.keyNames || []).forEach(function (k) { keySet[k] = true; });
+
+    // 列：键列在前（顺序同 keyNames），其余源列按原顺序在后
+    var baseHeaders = (r.headers && r.headers.length) ? r.headers : [];
+    var layout = [];
+    var keysFirst = (r.keyNames && r.keyNames.length) ? r.keyNames : [];
+    var seen = {};
+    keysFirst.forEach(function (k) { if (baseHeaders.indexOf(k) >= 0 && !seen[k]) { layout.push({ header: k, isKey: true }); seen[k] = true; } });
+    baseHeaders.forEach(function (h) { if (!seen[h]) { layout.push({ header: h, isKey: !!keySet[h] }); } });
+
+    var META = ['新文件行号', '旧文件行号', '变化情况'];
+    var headers = ['类别'].concat(layout.map(function (x) { return x.header; })).concat(META);
+
+    var ws = wb.addWorksheet(trimSheetName(r.sheet + '_变更汇总'));
+    ws.addRow(headers);
+
+    function pushAdded(item) {
+      catArr.push(CAT_ADD);
+      var row = [CAT_ADD];
+      layout.forEach(function (x) { row.push(safeVal(item.cells[x.header])); });
+      row.push(item.newRow, '', '新增');
+      ws.addRow(row);
+    }
+    function pushDeleted(item) {
+      catArr.push(CAT_DEL);
+      var row = [CAT_DEL];
+      layout.forEach(function (x) { row.push(safeVal(item.cells[x.header])); });
+      row.push('', item.oldRow, '删除');
+      ws.addRow(row);
+    }
+    function pushModified(m) {
+      catArr.push(CAT_MOD);
+      var changedSet = {};
+      (m.changedCols || []).forEach(function (c) { if (c.indexOf('旧_') !== 0) changedSet[c] = true; });
+      var changedNames = Object.keys(changedSet);
+
+      var row = [CAT_MOD];
+      layout.forEach(function (x) {
+        var h = x.header;
+        if (changedSet[h]) {
+          var nv = cellOf(m, h);
+          var ov = (m.oldValues && Object.prototype.hasOwnProperty.call(m.oldValues, h)) ? m.oldValues[h] : '';
+          if (!(Object.prototype.hasOwnProperty.call(m.oldValues || {}, h)) &&
+              Object.prototype.hasOwnProperty.call(m.oldValues || {}, '旧_' + h)) {
+            ov = m.oldValues['旧_' + h];
+          }
+          row.push(safeVal(ov) + ' → ' + safeVal(nv));
+        } else {
+          row.push(safeVal(cellOf(m, h)));
+        }
+      });
+      row.push(m.newRow, m.oldRow, '修改：' + changedNames.join('、'));
+      ws.addRow(row);
+    }
+
+    // 修改（最需关注）打头，其次新增，最后删除
+    r.modified.forEach(pushModified);
+    r.added.forEach(pushAdded);
+    r.deleted.forEach(pushDeleted);
+
+    // 列宽：键列/数据列沿用源文件；类别/元信息按内容的宽
+    var srcIdxOf = {};
+    baseHeaders.forEach(function (h, i) { srcIdxOf[h] = i; });
+    var colMap = {};
+    layout.forEach(function (x, i) { if (srcIdxOf[x.header] !== undefined) colMap[i + 2] = srcIdxOf[x.header]; });
+    applyMeta(ws, meta, 0, 1, headers.length, colMap);
+    styleHeaderRow(ws, 1, headers.length);
+
+    var nData = catArr.length;
+    var metaStart = layout.length + 2;   // 新文件行号列号（1 基）
+    ws.getColumn(1).width = 10;
+    styleSpecialCol(ws, metaStart, nData);
+    styleSpecialCol(ws, metaStart + 1, nData);
+    styleSpecialCol(ws, metaStart + 2, nData);
+    finalizeSheet(ws, headers, [
+      { index: 1, values: ['类别', CAT_ADD, CAT_MOD, CAT_DEL] },
+      { index: metaStart, values: ['新文件行号'].concat(catArr.map(function () { return 1; })) },
+      { index: metaStart + 1, values: ['旧文件行号'] },
+      { index: metaStart + 2, values: ['变化情况'] }
+    ]);
+
+    // 按类别整行上底色 / 类别文字色；键列保持中性
+    for (var rr = 0; rr < catArr.length; rr++) {
+      var cat = catArr[rr];
+      var rowNo = rr + 2;
+      var fill = CAT_FILL[cat];
+      var textColor = CAT_TEXT[cat];
+
+      // 类别列：完整底色 + 深色加粗文字
+      var cCell = ws.getRow(rowNo).getCell(1);
+      cCell.fill = fillOf(fill);
+      cCell.font = { bold: true, size: 10, color: { argb: textColor } };
+
+      // 数据列：键列不染色，其余上整行底色
+      layout.forEach(function (x, i) {
+        if (x.isKey) {
+          var kCell = ws.getRow(rowNo).getCell(i + 2);
+          kCell.font = { bold: true, size: 10 };
+          kCell.border = border();
+        } else {
+          ws.getRow(rowNo).getCell(i + 2).fill = fillOf(fill);
+        }
+      });
+
+      // 修改行：被改单元格再强调一层「旧 → 新」
+      if (cat === CAT_MOD) {
+        var m = r.modified[rr];
+        var changedSetM = {};
+        (m.changedCols || []).forEach(function (c) { if (c.indexOf('旧_') !== 0) changedSetM[c] = true; });
+        layout.forEach(function (x, i) {
+          if (changedSetM[x.header]) {
+            var chCell = ws.getRow(rowNo).getCell(i + 2);
+            chCell.fill = fillOf(CHG_FILL);
+            chCell.font = { bold: true, size: 10, color: { argb: CHG_TEXT } };
+          }
+        });
+      }
+    }
+
+    // 冻结：表头 + 类别列
+    ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
+    return ws;
+  }
+
+  /**
    * 源表头以上内容：单独 sheet 保留（标题栏 / 分组行 / 公式行），不混进数据表。
    * 这是与 aibg 的差异——aibg 直接丢弃，导致报告看不出表从哪来。
    */
@@ -537,6 +692,7 @@
       addAddedSheet(wb, r, newMeta[r.sheet]);
       addModifiedSheet(wb, r, newMeta[r.sheet]);
       addDeletedSheet(wb, r, oldMeta[r.sheet]);
+      addChangeSummarySheet(wb, r, newMeta[r.sheet]);
     });
 
     return wb.xlsx.writeBuffer().then(function (buf) {
