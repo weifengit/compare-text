@@ -420,26 +420,23 @@ setTimeout(function () {
           failed++;
           console.log('FAIL  文件选择立即响应\n      ' + e2.message);
         }
-        // 选中子文件夹 → 默认填充 原始=第一个 / 修改=第二个 文件并自动渲染主区域
+        // 选中子文件夹 → 只加载该目录的文件列表，**不**自动选中前两个文件。
+        // 原因（见 src/filterbar.js loadDir 的注释）：默认文件可能很大，自动选中并加载
+        // 会造成明显卡顿，所以改为让用户手动从下拉里选。
         els['fileSelL'].value = '';
         els['fileSelR'].value = '';
         els['dirSel'].value = '/tmp/对比源/子文件夹1';
         els['dirSel'].dispatch('change');
         setTimeout(function () {
           try {
-            if (els['fileSelL'].value !== '/tmp/对比源/子文件夹1/a.txt' ||
-                els['fileSelR'].value !== '/tmp/对比源/子文件夹1/b.txt') {
-              throw new Error('原始/修改文件应默认成对填充，实际 L=' + els['fileSelL'].value + ' R=' + els['fileSelR'].value);
-            }
-            if (editors[0].getValue() !== '非PDF文件文本' || editors[1].getValue() !== '非PDF文件文本') {
-              throw new Error('选中子文件夹后两侧应自动渲染，实际 L=' + JSON.stringify(editors[0].getValue())
-                + ' R=' + JSON.stringify(editors[1].getValue()));
+            if (els['fileSelL'].value !== '' || els['fileSelR'].value !== '') {
+              throw new Error('切换子文件夹后不应自动选中文件，实际 L=' + els['fileSelL'].value + ' R=' + els['fileSelR'].value);
             }
             passed++;
-            console.log('  ok  子文件夹：默认填充原始/修改文件并立即渲染');
+            console.log('  ok  子文件夹：切换后只加载文件列表，不自动选中文件');
           } catch (e3) {
             failed++;
-            console.log('FAIL  子文件夹自动渲染\n      ' + e3.message);
+            console.log('FAIL  子文件夹切换行为\n      ' + e3.message);
           }
           // 主区域1 左右列协同滚动（flow 视图 leftBody/rightBody）
           var lb = els['leftBody'], rb = els['rightBody'];

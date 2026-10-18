@@ -29,6 +29,11 @@ node serve.js build             # 重建 Tauri 打包用的 dist/（一般由打
 - **PDF 面板**：自动缩放 / 适应宽度 / 适应页面 三种缩放（Ctrl+滚轮手动调比例），可全屏；高度弹性撑满（隐藏编辑区后自动利用释放空间）；拖拽不选中文字
 - **PDF 差异标注**：把对比差异直接标注在 PDF 页面上（变更/删除/新增分别用琥珀/红/绿背景色标出对应行）
 - 行级 + 字符级（词级）高亮
+- **Excel 表格对比（.xlsx）**：多 Sheet 一次对比；表头行支持**行号范围**（对齐真实报表的多行表头）；键列可多选拼复合键（如 `提取物批号`），不选则自动识别，识别不到退化为整行哈希比对
+  - 结果区按**新增 / 修改 / 删除**分栏展示，修改行逐列显示「旧值 → 新值」并高亮变化列
+  - 主区域三方原表对照（虚拟滚动，按源文件列宽/隐藏列渲染，差异单元格涂色，可一键跳到对应行）
+  - 导出**带源文件格式还原的 Excel 报告**（列宽/表头样式/行高/冻结窗格全部保留），表头以上的标题栏/分组行也一并保留
+  - 读取前自动清洗 WPS/Excel 写坏的 `_FilterDatabase` 定义名（否则 2000 行的小表也会吃 3GB 内存）
 - **忽略选项（默认全选中）**：
   - 忽略大小写
   - 忽略 CRLF/LF 行结束符
@@ -64,6 +69,17 @@ src/tabs.js             顶部多标签页栏
 src/worker.js           Web Worker 入口
 src/app.js              界面 / 渲染 / 多标签状态 / 历史 / Worker 编排
 src/external-links.js   外部链接（桌面模式调系统浏览器）
+src/docxview.js         Word(.docx) 渲染与文本提取、差异标注
+src/ocr.js              扫描版 PDF 的 OCR（onnxruntime-web + PP-OCRv4）
+src/report.js           自包含 HTML 报告模板
+src/pipeline.js         文本对比管线（加载→计算→渲染→面板上色，无头驱动也走它）
+src/xlsx-io.js          Excel 读取：definedNames 预清洗 + 值/格式元数据抽取
+src/xlsx-compare.js     Excel 对比算法（键列匹配 / 宽松取值比较 / 哈希退化）
+src/xlsx-report.js      Excel 报告生成（格式还原：列宽/样式/行高/冻结）
+src/xlsxflow.js         Excel 对比编排（读一个丢一个，峰值内存减半）
+src/xlsxview.js         结果区三视图（全部 / 新增 / 修改 / 删除）
+src/sheetview.js        主区域3 的表格查看器（虚拟滚动、差异涂色）
+src/xlsxconfig.js       多 Sheet 配置弹窗（表头行范围 + 键列 + 预览）
 test/                   Node 测试
 src-tauri/              Tauri 桌面壳（Rust 命令在 src-tauri/src/lib.rs）
 ```
@@ -75,6 +91,7 @@ npm test             # 核心：算法 + Worker 桥接 + 界面初始化/渲染�
 npm run test:all     # 扩展：再加 API / 协同滚动 / PDF 多页切换
 npm run test:ui      # 单独跑界面初始化/渲染（DOM 桩）
 npm run test:pdf     # 单独跑 PDF 多页切换
+npm run test:xlsx    # 单独跑 Excel 对比（读取/清洗/比对/报告生成/三视图）
 ```
 
 测试均在 Node 内跑（DOM 桩 / 直接调用导出），无需浏览器或服务器。

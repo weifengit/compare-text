@@ -506,6 +506,11 @@
   }
 
   function exportReport() {
+    // 表格对比模式下，导出走 Excel 报告（与文本模式的 HTML 报告并行）
+    if (xlsxMode && typeof XlsxFlow !== 'undefined' && XlsxFlow.getResult()) {
+      exportXlsxReport();
+      return;
+    }
     var r = Pipeline.getResult ? Pipeline.getResult() : null;
     if (!r || r.error) { toast('没有可导出的对比结果', true); return; }
     if (typeof Report === 'undefined' || !Report.build) { toast('报告模块未加载（report.js 缺失）', true); return; }
@@ -577,6 +582,182 @@
   }
   if (exportReportBtn) exportReportBtn.addEventListener('click', exportReport);
 
+  // ---------- 表格（Excel）对比 ----------
+  // 与文本对比并行的第二条通道：选到 .xlsx 时由「表格对比配置」按钮发起，
+  // 配置（多 sheet / 表头行范围 / 键列）确认后跑 XlsxFlow.run，结果进主区域1 三视图，
+  // 两侧原表进主区域3 的 SheetView。导出按钮同时变为 Excel 报告。
+  var xlsxCfgBtn = $('xlsxCfgBtn');
+  /** 当前是否处于表格对比模式（决定导出按钮的行为） */
+  var xlsxMode = false;
+
+  function isXlsxPath(p) { return /\.xlsx$/i.test(String(p || '')); }
+
+  /** 根据两侧所选文件决定是否显示「表格对比配置」按钮 */
+  function updateXlsxAffordance() {
+    if (!xlsxCfgBtn) return;
+    var pL = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
+    var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
+    var any = isXlsxPath(pL) || isXlsxPath(pR);
+    xlsxCfgBtn.hidden = !any;
+  }
+
+  /** 打开配置弹窗：先读两边 sheet 清单与预览，再交给 XlsxConfig 渲染 */
+  function openXlsxConfig() {
+    if (typeof XlsxFlow === 'undefined' || typeof XlsxConfig === 'undefined') {
+      toast('表格对比模块未加载', true); return;
+    }
+    var pL = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
+    var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
+    if (!isXlsxPath(pL) && !isXlsxPath(pR)) {
+      toast('请先选择 .xlsx 文件（旧版 .xls 请先另存为 .xlsx）', true); return;
+    }
+    toast('正在读取表格结构…');
+    XlsxFlow.configure(isXlsxPath(pL) ? pL : '', isXlsxPath(pR) ? pR : pL)
+      .then(function (cfg) {
+        var names = Object.keys(cfg || {});
+        if (!names.length) { toast('这两个文件里没有可对比的 Sheet', true); return; }
+        XlsxConfig.init();
+        XlsxConfig.open(cfg, runXlsxCompare);
+      })
+      .catch(function (e) { toast('读取表格失败：' + ((e && e.message) || e), true); });
+  }
+
+  /** 配置确认后执行对比，并把结果渲染到两个区域 */
+  function runXlsxCompare(cfg) {
+    setBusy(true);
+    var pL = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
+    var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
+    // 重新绑定路径：用户在弹窗里可能改过，以当前下拉选择为准
+    XlsxFlow.configurePaths(isXlsxPath(pL) ? pL : '', isXlsxPath(pR) ? pR : pL);
+    XlsxFlow.run(cfg).then(function (res) {
+      xlsxMode = true;
+      setBusy(false);
+      renderXlsxResult(res);
+      statusEl.textContent = XlsxView.summaryHtml(res);
+      statusEl.classList.toggle('bad', res.summary.added + res.summary.modified + res.summary.deleted === 0);
+      if (exportReportBtn) {
+        exportReportBtn.textContent = '导出 Excel 报告';
+        exportReportBtn.title = '把对比结果导出为带源文件格式还原的 Excel 报告（多 Sheet）';
+      }
+    }).catch(function (e) {
+      setBusy(false);
+      toast('表格对比失败：' + ((e && e.message) || e), true);
+    });
+  }
+
+  /** 把对比结果铺到主区域1（三视图）与主区域3（两侧表格） */
+  function renderXlsxResult(res) {
+    // 表格对比时主区域2（编辑区）没有内容可显示：Excel 是二维表，转成纯文本会丢列对齐，
+    // 所以差异只在主区域1 用三视图呈现、原表在主区域3 呈现。这里把空着的编辑区收起，
+    // 把高度让给主区域1 和主区域3（否则中间空一块，三视图被挤得很矮，正是"看不全"的原因之一）。
+    if (!editorsHidden) setEditorsHidden(true);
+
+    // 主区域1：三视图
+    if (typeof XlsxView !== 'undefined') {
+      XlsxView.init({
+        mount: results,
+        // 切 sheet：主区域3 必须跟着换成该 sheet 的原表。
+        // （之前只在"点行号跳转"时顺带切换，单纯点 sheet 标签时表格区停在旧 sheet 不动。）
+        onSheetChange: function (sheet) {
+          renderXlsxPanels(res, sheet);
+        },
+        onJump: function (sheet, row, side) {
+          // 若当前 sheet 与主区域3 显示的不同，先换 sheet 再定位
+          if (typeof SheetView !== 'undefined' && SheetView.getSheetName && SheetView.getSheetName(side) !== sheet) {
+            renderXlsxPanels(res, sheet);
+          }
+          // 点"新/旧 N 行"：主区域3 滚到该行并短暂高亮
+          if (typeof SheetView !== 'undefined' && SheetView.isLoaded(side)) {
+            SheetView.scrollToRow(side, row);
+          }
+        },
+      });
+      XlsxView.render(res, { sheet: res.sheets.length ? res.sheets[0].sheet : null, view: 'all' });
+    }
+    // 主区域3：两侧原表
+    renderXlsxPanels(res);
+    updatePdfArea();
+  }
+
+  /** 把某 sheet 的原表铺到主区域3 两侧（差异涂色） */
+  function renderXlsxPanels(res, sheetName) {
+    if (typeof SheetView === 'undefined') return;
+    var sheets = XlsxFlow.getSheets ? XlsxFlow.getSheets() : null;
+    if (!sheets) return;
+    var st = XlsxView.getState ? XlsxView.getState() : null;
+    var name = sheetName || (st && st.sheet) || (res.sheets.length ? res.sheets[0].sheet : null);
+    if (!name) return;
+    SheetView.init({ left: $('pdfLeft'), right: $('pdfRight') });
+    if (PdfView.clear) PdfView.clear();
+    if (typeof DocxView !== 'undefined' && DocxView.clear) DocxView.clear();
+
+    var marks = XlsxFlow.buildDiffMarks(name);
+    var missingSide = null;
+    ['L', 'R'].forEach(function (side) {
+      var data = side === 'L' ? sheets.old[name] : sheets.new[name];
+      if (data) {
+        SheetView.load(side, data);
+        SheetView.setDiff(side, side === 'L' ? marks.L : marks.R);
+      } else {
+        // 该 sheet 只存在于另一侧（如"新增品种"只在新闻件里）。
+        // 不显示空面板，明确说明原因——否则用户会以为表格没加载出来。
+        SheetView.clear(side, true);   // 保留白底：这侧要显示"只存在于另一侧"的提示
+        missingSide = side;
+      }
+    });
+    if (missingSide) {
+      var host = $(missingSide === 'L' ? 'pdfLeft' : 'pdfRight');
+      if (host) {
+        host.innerHTML = '<div class="sv-missing">该 Sheet 只存在于' +
+          (missingSide === 'L' ? '新' : '旧') + '文件中，此处无对应原表</div>';
+      }
+    }
+    updatePdfArea();   // 换了 sheet 后可能从"有内容"变"两侧都空"，需重算显隐
+  }
+
+  if (xlsxCfgBtn) xlsxCfgBtn.addEventListener('click', openXlsxConfig);
+
+  /** 退出表格模式：清掉表格结果，恢复文本模式的按钮/状态栏语义 */
+  function resetXlsxMode() {
+    xlsxMode = false;
+    if (typeof XlsxFlow !== 'undefined') XlsxFlow.reset();
+    if (typeof XlsxView !== 'undefined') XlsxView.reset();
+    if (typeof SheetView !== 'undefined') SheetView.clear();
+    if (exportReportBtn) {
+      exportReportBtn.textContent = '导出报告';
+      exportReportBtn.title = '把当前对比结果导出为自包含 HTML 报告（含逐页快照与差异标注）';
+    }
+  }
+
+  /** 导出带格式还原的 Excel 报告 */
+  function exportXlsxReport() {
+    if (!Source || !Source.writeBinary) { toast('写文件不可用', true); return; }
+    var name = XlsxFlow.defaultName();
+    toast('正在生成 Excel 报告…');
+    XlsxFlow.exportReport(name).then(function (r) {
+      if (Source.isTauri) {
+        // 桌面版：选目录（绝对路径）→ 写入
+        if (!Picker || !Picker.open) { toast('保存位置选择不可用', true); return; }
+        Picker.open(function (dir) {
+          if (!dir) return;                                  // 用户取消
+          var full = dir.replace(/[\\/]+$/, '') + '/' + r.fileName;
+          Source.writeBinary(full, r.bytes,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            .then(function () { toast('Excel 报告已导出：' + full); })
+            .catch(function (e) { toast('导出失败：' + ((e && e.message) || e), true); });
+        });
+      } else {
+        Source.writeBinary(r.fileName, r.bytes,
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+          .then(function () { toast('Excel 报告已导出（已保存到下载目录）：' + r.fileName); })
+          .catch(function (e) { toast('导出失败：' + ((e && e.message) || e), true); });
+      }
+    }).catch(function (e) {
+      toast('生成 Excel 报告失败：' + ((e && e.message) || e), true);
+    });
+  }
+  // 文件选择变化时重算按钮可见性（FilterBar 的 onFileChange 已接到 Pipeline.loadSide）
+
   // ---------- 编辑区高度可调 ----------
   var EDITORS_KEY = 'diffchecker_editors_h';
   var edResizeState = null;
@@ -631,8 +812,13 @@
   // 未就绪的 pdfarea 高度而把 appEl 永久缩矮（“清空全部”被侧边栏 overflow:hidden 裁掉）。
   // 自然布局在显示后自动对齐（同 HEAD 行为）；resize/拖拽/折叠等已有调用点负责显式重排。
   function updatePdfArea() {
+    // 三种查看器共用主区域3：PDF / Word / Excel 表格。
+    // ⚠️ 新增查看器时必须同步加到这里，否则该类型加载成功后面板仍被判定为"无内容"而隐藏
+    //（Excel 对比刚做完时就漏了 SheetView，导致主区域3 一直是空的）。
     var hasPdf = !!(PdfView.isLoaded && (PdfView.isLoaded('L') || PdfView.isLoaded('R')))
-      || !!(DocxView.isLoaded && (DocxView.isLoaded('L') || DocxView.isLoaded('R')));
+      || !!(DocxView.isLoaded && (DocxView.isLoaded('L') || DocxView.isLoaded('R')))
+      || !!(typeof SheetView !== 'undefined' && SheetView.isLoaded
+            && (SheetView.isLoaded('L') || SheetView.isLoaded('R')));
     pdfareaEl.classList.toggle('hidden', !hasPdf);
   }
   function refitPageToPdf() {
@@ -752,7 +938,12 @@
   if (FilterBar.init) {
     FilterBar.init({
       getRoot: getSrcRoot,
-      onFileChange: function (side, absPath) { Pipeline.loadSide(side, absPath); },
+      onFileChange: function (side, absPath) {
+        Pipeline.loadSide(side, absPath);
+        updateXlsxAffordance();
+        // 选了非表格文件 → 退出表格模式，导出按钮恢复为 HTML 报告
+        if (xlsxMode && !isXlsxPath(absPath)) resetXlsxMode();
+      },
       onFieldPick: function (text) { editorL.setValue(text); },
       onDirChange: onDirChange
     });
@@ -1282,6 +1473,8 @@
       if (PdfView.clear) PdfView.clear();
       if (DocxView.clear) DocxView.clear();
       updatePdfArea();
+      updateXlsxAffordance();          // 空白 tab：隐藏「表格对比配置」按钮
+      if (xlsxMode) resetXlsxMode();
       return;
     }
     var chain = (tab.srcRoot && tab.srcRoot !== getSrcRoot() && FilterBar.reload)
@@ -1294,6 +1487,10 @@
     }).then(function () {
       if (my !== switchSeq) return;
       selectTabFiles(tab, my);
+    }).then(function () {
+      // 文件下拉已恢复 → 重算「表格对比配置」按钮的可见性（恢复会话/切标签页都要走）
+      if (my !== switchSeq) return;
+      updateXlsxAffordance();
     }).catch(function () { /* 恢复失败不致命：编辑区内容已恢复 */ });
   }
   function onTabSwitch(id) {

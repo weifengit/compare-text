@@ -126,6 +126,11 @@ var MIME = {
   '.jpeg': 'image/jpeg'
 };
 var API_MIME = {
+  // 表格：前端用 XlsxFlow 走 readBytes/arrayBuffer 读它，这里给对 MIME 是为了
+  // 万一被浏览器直接打开时按二进制处理，而不是当 text/plain 显示成乱码。
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xlsm': 'application/vnd.ms-excel.sheet.macroEnabled.12',
+  '.xls': 'application/vnd.ms-excel',
   '.pdf': 'application/pdf',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.txt': 'text/plain; charset=utf-8',

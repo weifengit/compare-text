@@ -146,6 +146,47 @@ fn api_write_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(p, content.as_bytes()).map_err(|e| format!("写入失败：{}", e))
 }
 
+/// 写二进制文件：Excel 报告导出用（xlsx 是二进制，不能走 api_write_file 的 UTF-8 字符串）。
+/// 前端传 base64 字符串而非 number[]：JS 侧把字节数组序列化成 JSON 数组会让 1MB 文件膨胀到 4MB+，
+/// 且 JSON 数字逐个解析在 IPC 上耗时差一个量级。base64 解码自己实现，不引第三方 crate。
+#[tauri::command]
+fn api_write_file_binary(path: String, base64: String) -> Result<(), String> {
+    let data = decode_base64(&base64).ok_or_else(|| "base64 解码失败（数据可能不完整）".to_string())?;
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{}", e))?;
+        }
+    }
+    std::fs::write(p, &data).map_err(|e| format!("写入失败：{}", e))
+}
+
+/// 标准 base64 解码（支持换行与 = 补位；非法字符返回 None）。
+fn decode_base64(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let mut buf: u32 = 0;
+    let mut bits: u32 = 0;
+    for b in s.bytes() {
+        let v = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,          // 补位开始，后面不再有数据
+            b'\n' | b'\r' | b' ' | b'\t' => continue,
+            _ => return None,
+        } as u32;
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xFF) as u8);
+        }
+    }
+    Some(out)
+}
+
 /// 用系统默认浏览器打开外部链接（"请作者喝茶"等 target="_blank" 外链；WebView 不自动处理）。
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
@@ -160,6 +201,7 @@ pub fn run() {
             api_browse,
             api_read_file,
             api_write_file,
+            api_write_file_binary,
             open_url
         ])
         .run(tauri::generate_context!())

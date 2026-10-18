@@ -627,6 +627,20 @@
         if (typeof DocxView !== 'undefined' && DocxView.clear) DocxView.clear(side);
         cfg.onPanelsChanged();
         cfg.toast('暂不支持旧版 .doc 格式，请先用 Word/WPS 另存为 .docx', true);
+      } else if (/\.(xlsx|xlsm|xls)$/i.test(absPath)) {
+        // 表格文件：绝不能走下面的 r.text() 分支——xlsx 是 ZIP 二进制，
+        // 当文本读会把 "PK\x03\x04...[Content_Types].xml" 灌进编辑器（用户看到的就是乱码）。
+        // 这里只做"该侧没有可对比的纯文本"的登记，真正的表格读取与对比由 XlsxFlow 负责
+        // （用户点「表格对比配置」时按需读取，避免选文件就吃掉几百 MB 内存）。
+        if (PdfView.clear) PdfView.clear(side);
+        if (typeof DocxView !== 'undefined' && DocxView.clear) DocxView.clear(side);
+        cfg.onPanelsChanged();
+        // 编辑器里原来的文本保留不清空：用户可能想拿表格和一段文本对照，
+        // 但更常见的是两侧都选表格——那时编辑器内容会被 XlsxView 接管显示。
+        if (!/\.xlsx$/i.test(absPath)) {
+          // xls/xlsm 明确提示：一个读不了（旧格式），一个暂未支持
+          cfg.toast('旧版 .xls 暂不支持，请先用 Excel/WPS 另存为 .xlsx；.xlsm 请另存为 .xlsx 后再对比', true);
+        }
       } else {
         fetch(url).then(function (r) {
           if (!r.ok) throw new Error('HTTP ' + r.status + (r.status === 404 ? '（文件不存在）' : ''));

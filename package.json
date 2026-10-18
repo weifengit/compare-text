@@ -1,6 +1,6 @@
 {
   "name": "compare-text",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "private": true,
   "description": "离线文本对比工具（浏览器 / Tauri 桌面双模式）",
   "license": "Apache-2.0",
@@ -8,14 +8,15 @@
   "previewUrlNote": "供 DSH 插件（如 dsh-tokensave 项目中心）的「展示」按钮在 DSH 内 iframe 打开本工具；需与 plugins/dsh-compare-text/cordis.patch.yml 的 config.port 一致",
   "scripts": {
     "start": "node serve.js",
-    "test": "node test/smoke.js && node test/integration.js && node test/ui-init.js && node test/combobox.js && node test/report.js && node test/dsh-report.js",
-    "test:all": "node test/smoke.js && node test/integration.js && node test/api-test.js && node test/scroll-rebind.js && node test/scroll-control.js && node test/scroll-char.js && node test/pdf-multipage-switch.js && node test/docxview.js && node test/report.js && node test/dsh-report.js",
+    "test": "node test/smoke.js && node test/integration.js && node test/ui-init.js && node test/combobox.js && node test/report.js && node test/dsh-report.js && node test/xlsx.js",
+    "test:all": "node test/smoke.js && node test/integration.js && node test/api-test.js && node test/scroll-rebind.js && node test/scroll-control.js && node test/scroll-char.js && node test/pdf-multipage-switch.js && node test/docxview.js && node test/report.js && node test/dsh-report.js && node test/xlsx.js",
     "test:docx": "node test/docxview.js",
     "test:ui": "node test/ui-init.js",
     "test:pdf": "node test/pdf-multipage-switch.js",
     "tauri": "tauri",
     "dev:desktop": "tauri dev",
-    "build:desktop": "tauri build"
+    "build:desktop": "tauri build",
+    "test:xlsx": "node test/xlsx.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

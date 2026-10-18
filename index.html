@@ -56,6 +56,7 @@
         <button id="foldBtn" class="btn" title="折叠 / 展开连续相同的行">折叠相同行</button>
         <button id="clearBtn" class="btn" title="清空加入比较的内容（编辑器与标注区）">清除</button>
         <button id="exportReportBtn" class="btn" title="把当前对比结果导出为自包含 HTML 报告（含逐页快照与差异标注）">导出报告</button>
+        <button id="xlsxCfgBtn" class="btn" hidden title="配置并对比表格（Excel）：多 Sheet、表头行范围、键列">表格对比配置</button>
       </div>
     </div>
 
@@ -127,11 +128,28 @@
     </div>
   </div>
 </div>
+<!-- 表格（Excel）对比配置弹窗：多 Sheet 勾选 + 表头行范围 + 键列 + 预览 -->
+<div class="xc-mask" id="xlsxCfgMask" hidden>
+  <div class="xc-modal" role="dialog" aria-label="表格对比配置">
+    <div class="xc-head">
+      <span class="xc-head-title" id="xlsxCfgTitle">表格对比配置</span>
+      <button id="xlsxCfgClose" class="btn" type="button" title="关闭">×</button>
+    </div>
+    <div class="xc-body" id="xlsxCfgBody"></div>
+    <div class="xc-foot">
+      <span class="xc-foot-hint">表头行支持多行（起始～结束）；键列可多选拼成复合键</span>
+      <span class="xc-foot-spacer"></span>
+      <button id="xlsxCfgCancel" class="btn" type="button">取消</button>
+      <button id="xlsxCfgOk" class="btn primary" type="button">开始对比</button>
+    </div>
+  </div>
+</div>
 
 <script src="lib/pdf.min.js"></script>
 <script src="lib/codemirror.min.js"></script>
 <script src="lib/diff.min.js"></script>
 <script src="lib/jszip.min.js"></script>
+<script src="lib/exceljs.min.js"></script>
 <script src="lib/mammoth.browser.min.js"></script>
 <script src="lib/docx-preview.min.js"></script>
 <script src="src/normalize.js"></script>
@@ -147,6 +165,13 @@
 <script src="src/ocr.js"></script>
 <script src="src/report.js"></script>
 <script src="src/pipeline.js"></script>
+<script src="src/xlsx-io.js"></script>
+<script src="src/xlsx-compare.js"></script>
+<script src="src/xlsx-report.js"></script>
+<script src="src/xlsxflow.js"></script>
+<script src="src/xlsxview.js"></script>
+<script src="src/sheetview.js"></script>
+<script src="src/xlsxconfig.js"></script>
 <script src="src/app.js"></script>
 <script src="src/external-links.js"></script>
 </body>

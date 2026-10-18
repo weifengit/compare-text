@@ -854,3 +854,229 @@ html, body {
 .ocr-actions .btn { margin: 0; }
 .ocr-err { color: var(--del-text); font-size: 12px; margin-top: 6px; word-break: break-all; }
 .ocr-err[hidden] { display: none; }
+/* ==========================================================================
+   表格（Excel）对比
+   配色与差异语义沿用文本区：红=删除/原文、绿=新增、琥珀=修改。
+   ========================================================================== */
+
+/* 主区域1：三视图（全部 / 新增 / 修改 / 删除） */
+.xv {
+  font-size: 12.5px;
+  /* 结果区（.results）是固定高度 + overflow:hidden 的；三视图必须自己撑满并滚动，
+     否则内容一多就被裁掉（.xv 自身不留 padding，改由内层分区各自控制，避免滚动条贴边）。 */
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.xv-sheetbar {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 8px 10px 8px; border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;          /* 不参与伸缩：滚动的是下面的行列表，不是它 */
+}
+.xv-sheet {
+  font: inherit; font-size: 12px; padding: 3px 10px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--txt);
+  border-radius: 5px; display: inline-flex; align-items: center; gap: 6px;
+}
+.xv-sheet:hover { background: var(--fold-bg); }
+.xv-sheet.active { border-color: var(--accent); color: var(--accent); background: #eef4ff; font-weight: 600; }
+.xv-sheet.nodiff { color: var(--muted); }
+.xv-badge {
+  font-size: 10.5px; min-width: 18px; text-align: center; padding: 0 4px; border-radius: 8px;
+  background: #e7ecf3; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.xv-badge.ok { background: var(--add-bg); color: var(--add-text); }
+
+.xv-viewbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 10px 0; flex: 0 0 auto; }
+.xv-view {
+  font: inherit; font-size: 12px; padding: 3px 12px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 5px;
+}
+.xv-view:hover { background: var(--fold-bg); }
+.xv-view.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.xv-view.empty { opacity: .55; }
+.xv-count { font-variant-numeric: tabular-nums; opacity: .85; }
+
+.xv-structural {
+  display: flex; flex-wrap: wrap; gap: 12px; padding: 6px 10px; margin: 8px 10px 0;
+  background: var(--fold-bg); border: 1px solid var(--border); border-radius: 5px; font-size: 12px;
+  flex: 0 0 auto;
+}
+.xv-st-add { color: var(--add-text); }
+.xv-st-del { color: var(--del-text); }
+
+.xv-meta {
+  display: flex; align-items: center; gap: 14px;
+  padding: 6px 10px 8px; color: var(--muted); font-size: 12px; flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+.xv-mode { flex: 1 1 auto; min-width: 0; }
+.xv-stat { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.xv-stat .ok-add { color: var(--add-text); }
+.xv-stat .ok-mod { color: #9a6a00; }
+.xv-stat .ok-del { color: var(--del-text); }
+
+.xv-section { margin-bottom: 14px; }
+.xv-sectionhead { font-weight: 600; font-size: 12px; color: var(--muted); margin: 0 0 6px; padding-left: 2px; }
+.xv-section.sec-add .xv-sectionhead { color: var(--add-text); }
+.xv-section.sec-mod .xv-sectionhead { color: #9a6a00; }
+.xv-section.sec-del .xv-sectionhead { color: var(--del-text); }
+
+.xv-row {
+  border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px;
+  background: var(--panel); overflow: hidden;
+}
+.xv-row-add { border-left: 3px solid var(--add-strong); }
+.xv-row-mod { border-left: 3px solid #ecd08a; }
+.xv-row-del { border-left: 3px solid var(--del-strong); }
+.xv-rowhead {
+  display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+  background: #fafbfc; border-bottom: 1px solid var(--border); font-size: 11.5px;
+}
+.xv-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 3px; font-weight: 600; }
+.xv-tag.add { background: var(--add-bg); color: var(--add-text); }
+.xv-tag.mod { background: var(--chg-bg); color: #8a6a00; }
+.xv-tag.del { background: var(--del-bg); color: var(--del-text); }
+.xv-ln {
+  font: inherit; font-size: 11px; cursor: pointer; padding: 1px 6px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--accent); border-radius: 3px;
+}
+.xv-ln:hover { background: #eef4ff; border-color: var(--accent); }
+.xv-arrow-sep { color: var(--muted); }
+.xv-changed-count { margin-left: auto; color: var(--muted); }
+
+.xv-cells { padding: 6px 8px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.xv-cell { display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; }
+.xv-k { color: var(--muted); font-size: 11.5px; flex: 0 0 auto; }
+.xv-k::after { content: '：'; }
+.xv-v { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.xv-diff { display: inline-flex; align-items: baseline; gap: 5px; font-family: var(--mono); font-size: 12px; }
+.xv-old { background: var(--del-bg); color: var(--del-text); padding: 0 3px; border-radius: 2px; text-decoration: line-through; word-break: break-all; }
+.xv-arrow { color: var(--muted); font-family: inherit; }
+.xv-new { background: var(--add-bg); color: var(--add-text); padding: 0 3px; border-radius: 2px; word-break: break-all; }
+.xv-empty { color: var(--line-num); font-style: italic; font-size: 11.5px; }
+/* 一行内容过多时的折叠提示（真实报表常上百列，全铺出来既看不完也难读） */
+.xv-more { color: var(--muted); font-size: 11.5px; padding: 1px 6px; background: var(--fold-bg); border-radius: 3px; }
+/* 键列：用于认出"这是哪一条记录"，给一点视觉权重（其余列是细节） */
+.xv-cell-key .xv-k { color: var(--accent); font-weight: 600; }
+.xv-cell-key .xv-v { font-weight: 600; }
+/* 行列表是唯一可滚动区：顶部三条（sheet/视图/摘要）固定，滚动的只是它 */
+.xv-rows { flex: 1 1 auto; overflow: auto; min-height: 0; padding: 0 10px 12px; }
+.xv-empty-state { padding: 28px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.xv-empty-state.ok { color: var(--add-text); }
+
+/* 主区域3：Excel 表格查看器（虚拟滚动） */
+.sv-host { padding: 0 !important; background: #fff !important; overflow: hidden; }
+/* 该 sheet 只存在于另一侧时的占位说明（比空白面板更清楚） */
+.sv-missing {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; min-height: 120px; padding: 24px;
+  color: var(--muted); font-size: 12.5px; text-align: center;
+  background: #fafbfc; border: 1px dashed var(--border); border-radius: 6px;
+}
+.sv-wrap { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.sv-head {
+  display: flex; flex: 0 0 auto; background: #f1f5fa;
+  border-bottom: 1px solid var(--border); position: relative; z-index: 1;
+  will-change: transform;
+}
+.sv-th {
+  flex: 0 0 auto; padding: 4px 6px; font-size: 11.5px; font-weight: 600; color: var(--txt);
+  border-right: 1px solid var(--border); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; line-height: 1.7;
+}
+.sv-th-ln { width: 56px; text-align: right; color: var(--line-num); font-weight: 400; }
+.sv-scroll { flex: 1 1 auto; overflow: auto; min-height: 0; overflow-anchor: none; }
+.sv-body { position: relative; }
+.sv-tr { display: flex; align-items: stretch; }
+.sv-tr:hover { background: #f7fafd; }
+.sv-td {
+  flex: 0 0 auto; padding: 2px 6px; font-size: 12px; line-height: 22px;
+  border-right: 1px solid #eef1f4; border-bottom: 1px solid #eef1f4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono);
+}
+.sv-td-ln { width: 56px; text-align: right; color: var(--line-num); font-family: inherit; font-size: 11px; background: #fafbfc; }
+.sv-add { background: var(--add-bg); }
+.sv-del { background: var(--del-bg); }
+.sv-mod { background: #fffdf5; }
+.sv-cell-add { background: var(--add-strong) !important; }
+.sv-cell-del { background: var(--del-strong) !important; }
+.sv-cell-mod { background: var(--chg-bg) !important; }
+.sv-hit { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Excel 对比配置弹窗 */
+.xc-mask {
+  position: fixed; inset: 0; background: rgba(20, 28, 40, .42);
+  display: flex; align-items: center; justify-content: center; z-index: 60;
+}
+.xc-mask[hidden] { display: none; }
+.xc-modal {
+  width: min(1000px, 94vw); max-height: 88vh; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .32);
+}
+.xc-head {
+  display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+  border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
+.xc-head-title { font-weight: 600; font-size: 14.5px; flex: 1 1 auto; }
+.xc-body { flex: 1 1 auto; overflow: auto; padding: 12px 16px; min-height: 0; }
+.xc-foot {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+  border-top: 1px solid var(--border); flex: 0 0 auto;
+}
+.xc-foot-hint { color: var(--muted); font-size: 11.5px; }
+.xc-foot-spacer { flex: 1 1 auto; }
+.xc-foot .btn { margin: 0; }
+
+.xc-sheetbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 10px; margin-bottom: 12px; background: var(--fold-bg);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.xc-bar-label { font-size: 12px; color: var(--muted); }
+.xc-all { font-size: 11.5px; padding: 2px 8px; }
+.xc-bar-items { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.xc-bar-item { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.xc-bar-item.off { opacity: .45; }
+
+.xc-cards { display: flex; flex-direction: column; gap: 10px; }
+.xc-card { border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.xc-card.disabled { opacity: .55; }
+.xc-cardhead {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 7px 10px; background: #fafbfc; border-bottom: 1px solid var(--border);
+}
+.xc-en { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
+.xc-title { font-weight: 600; }
+.xc-dim { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.xc-onlyold { font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--del-bg); color: var(--del-text); }
+.xc-hdr { margin-left: auto; font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.xc-num {
+  width: 52px; font: inherit; font-size: 12px; padding: 2px 4px;
+  border: 1px solid var(--border); border-radius: 4px; text-align: center;
+}
+.xc-to { color: var(--muted); }
+.xc-cardbody { padding: 8px 10px; }
+.xc-section { margin-bottom: 10px; }
+.xc-section:last-child { margin-bottom: 0; }
+.xc-hint { font-size: 11.5px; color: var(--muted); margin-bottom: 5px; }
+.xc-keys {
+  display: flex; flex-wrap: wrap; gap: 3px 12px; max-height: 120px; overflow: auto;
+  border: 1px solid var(--border); border-radius: 4px; padding: 6px;
+}
+.xc-key { font-size: 11.5px; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; white-space: nowrap; }
+.xc-key.on { color: var(--accent); font-weight: 600; }
+.xc-preview { overflow: auto; border: 1px solid var(--border); border-radius: 4px; max-height: 170px; }
+.xc-table { border-collapse: collapse; font-size: 11px; width: max-content; min-width: 100%; }
+.xc-table td {
+  border: 1px solid #eef1f4; padding: 2px 6px; white-space: nowrap;
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+}
+.xc-rownum { color: var(--line-num); text-align: right; background: #fafbfc; font-variant-numeric: tabular-nums; }
+.xc-tr-hd td { background: var(--fold-bg); font-weight: 600; }
+.xc-tr-above td { color: var(--muted); background: #fcfcfd; }
+.xc-more, .xc-more-rows { color: var(--line-num); font-size: 11px; }
+.xc-more-rows { padding: 4px 6px; }
+.xc-empty { color: var(--line-num); font-size: 11.5px; font-style: italic; }

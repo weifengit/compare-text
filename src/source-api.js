@@ -42,6 +42,10 @@
   var MIME = {
     '.pdf': 'application/pdf',
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    // 表格：Blob 的 type 决定后续怎么被解读，给错会让 .text() 解出乱码
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xlsm': 'application/vnd.ms-excel.sheet.macroEnabled.12',
+    '.xls': 'application/vnd.ms-excel',
     '.txt': 'text/plain; charset=utf-8',
     '.md': 'text/plain; charset=utf-8',
     '.csv': 'text/plain; charset=utf-8',
@@ -115,6 +119,56 @@
       .then(function () { return handle.name || 'report.html'; });
   }
 
+  /** 二进制写文件：Excel 报告导出用（xlsx 不能走 writeFile 的字符串通道）。
+   *  Tauri：传 base64 给 Rust 命令（比 number[] 快一个量级，也避免 IPC 体积膨胀）。
+   *  浏览器：Blob 下载（同 writeFile 的降级路径）。
+   */
+  function writeBinary(absPath, bytes, mime) {
+    if (isTauri) {
+      return tauriCore.invoke('api_write_file_binary', {
+        path: absPath,
+        base64: bytesToBase64(bytes)
+      });
+    }
+    var blob = new Blob([bytes], { type: mime || 'application/octet-stream' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = String(absPath).split('/').pop() || 'report.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+    return Promise.resolve();
+  }
+
+  /** 取文件原始字节（Excel 对比读表用，比 fileUrl 少一步 Blob URL 中转）。 */
+  function readBytes(absPath) {
+    if (isTauri) {
+      return tauriCore.invoke('api_read_file', { path: absPath }).then(function (arr) {
+        // Rust 返回 Vec<u8> → JSON 数字数组；转成 Uint8Array 便于下游处理
+        return new Uint8Array(arr);
+      });
+    }
+    return fetch('/api/file?path=' + encodeURIComponent(absPath)).then(function (r) {
+      if (!r.ok) throw new Error('读取失败：HTTP ' + r.status);
+      return r.arrayBuffer();
+    });
+  }
+
+  /** Uint8Array → base64（分块避免超大数组一次展开导致栈溢出）。 */
+  function bytesToBase64(bytes) {
+    var u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    var CH = 0x8000, parts = [];
+    for (var i = 0; i < u8.length; i += CH) {
+      var chunk = u8.subarray(i, i + CH);
+      var s = '';
+      for (var j = 0; j < chunk.length; j++) s += String.fromCharCode(chunk[j]);
+      parts.push(s);
+    }
+    return root.btoa(parts.join(''));
+  }
+
   root.Source = { list: list, browse: browse, fileUrl: fileUrl, writeFile: writeFile,
+    writeBinary: writeBinary, readBytes: readBytes,
     saveAsHandle: saveAsHandle, writeHandle: writeHandle, isTauri: isTauri };
 })(typeof self !== 'undefined' ? self : this);
