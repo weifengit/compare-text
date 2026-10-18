@@ -138,78 +138,104 @@
   function addAddedSheet(wb, r, meta) {
     if (!r.added.length) return;
     var ws = wb.addWorksheet(trimSheetName(r.sheet + '_新增'));
-    var headers = ['新文件行号'].concat(r.headers);
+    // 行号列放最后，与「修改」表保持同一套列布局（数据列在前，元信息在后）
+    var headers = r.headers.concat(['新文件行号']);
     ws.addRow(headers);
     r.added.forEach(function (item) {
-      var row = [item.newRow];
+      var row = [];
       r.headers.forEach(function (h) { row.push(safeVal(item.cells[h])); });
+      row.push(item.newRow);
       ws.addRow(row);
     });
-    applyMeta(ws, meta, 1, 1, headers.length);
+    applyMeta(ws, meta, 0, 1, headers.length);
     styleHeaderRow(ws, 1, headers.length);
-    styleSpecialCol(ws, 1, r.added.length);
+    styleSpecialCol(ws, headers.length, r.added.length);
   }
 
   /**
    * 生成 _.修改 分表。
-   * 列结构：[新文件行号][旧文件行号][变化情况] + 逐列"新值、旧_新值"穿插
-   * 只有实际发生变化的列才输出旧值列，保持报告可读（与 aibg 的穿插规则一致）。
+   *
+   * 列顺序（对齐 aibg「今日关注」监控对比的输出习惯）：
+   *   全部原始列（按源表顺序，未变的列也保留）
+   *   → 每个"变化列"的 旧_xxx 紧跟在它自己的原列后面
+   *   → 最后才是 [变化情况][新文件行号][旧文件行号]
+   *
+   * 为什么保留全部列：只看变化列时，脱离上下文根本认不出这是哪一条记录
+   * （aibg 那边同样是 original_columns 全留，只为变化的列追加 _old 列）。
+   * 行号与"变化情况"属于元信息，放最后不打断数据的横向阅读。
    */
   function addModifiedSheet(wb, r, meta) {
     if (!r.modified.length) return;
 
-    // 收集所有出现过的、真正被修改的列（不含结构增删的标记列）
+    // 每个数据行实际变化过的列（不含结构变化用的 "旧_xxx" 标记）
     var changedSet = {};
-    r.modified.forEach(function (m) { m.changedCols.forEach(function (c) { changedSet[c] = true; }); });
-
-    // 列顺序：按新表列序，变化列后面紧跟其"旧_xxx"
-    var layout = [];   // [{header, kind:'new'|'old', col}]
-    r.headers.forEach(function (h) {
-      if (!changedSet[h]) return;
-      layout.push({ header: h, kind: 'new', col: h });
-      layout.push({ header: '旧_' + h, kind: 'old', col: h });
-    });
-    // 只出现在旧文件、被删除的列：以 旧_xxx 形式补在最后
-    var oldOnly = {};
     r.modified.forEach(function (m) {
-      m.changedCols.forEach(function (c) {
-        if (c.indexOf('旧_') === 0 && !changedSet[c.slice(2)]) oldOnly[c] = true;
+      (m.changedCols || []).forEach(function (c) {
+        if (c.indexOf('旧_') !== 0) changedSet[c] = true;
       });
     });
-    Object.keys(oldOnly).forEach(function (marker) {
-      layout.push({ header: marker, kind: 'oldMark', col: marker });
+
+    // 列布局：先按源表顺序铺全部列，变化的列后面紧跟它的 旧_xxx
+    var layout = [];          // [{header, kind:'new'|'old'|'oldOnly', col}]
+    var baseHeaders = (r.headers && r.headers.length) ? r.headers : [];
+    baseHeaders.forEach(function (h) {
+      layout.push({ header: h, kind: 'new', col: h });
+      if (changedSet[h]) layout.push({ header: '旧_' + h, kind: 'old', col: h });
     });
 
+    // 只出现在旧文件、被删掉的列：以 旧_xxx 形式补在数据列之后、元信息列之前
+    var oldOnlySet = {};
+    r.modified.forEach(function (m) {
+      (m.changedCols || []).forEach(function (c) {
+        if (c.indexOf('旧_') === 0) oldOnlySet[c] = true;
+      });
+    });
+    Object.keys(oldOnlySet).forEach(function (marker) {
+      layout.push({ header: marker, kind: 'oldOnly', col: marker });
+    });
+
+    // 元信息列放在最后
+    var META = ['变化情况', '新文件行号', '旧文件行号'];
     var ws = wb.addWorksheet(trimSheetName(r.sheet + '_修改'));
-    var headers = ['新文件行号', '旧文件行号', '变化情况'].concat(layout.map(function (x) { return x.header; }));
+    var headers = layout.map(function (x) { return x.header; }).concat(META);
     ws.addRow(headers);
 
     r.modified.forEach(function (m) {
-      var row = [m.newRow, m.oldRow, '修改：' + m.changedCols.filter(function (c) { return c.indexOf('旧_') !== 0; }).join('、')];
+      var row = [];
       layout.forEach(function (x) {
-        if (x.kind === 'new') row.push(safeVal(m.cells[x.col]));
-        else if (x.kind === 'old') row.push(safeVal(m.oldValues[x.col]));
-        else row.push(safeVal(m.oldValues[x.col]));
+        if (x.kind === 'new') {
+          // 未变的列也要输出值：m.cells 只含变化列，所以回落到整行快照
+          row.push(safeVal(cellOf(m, x.col)));
+        } else if (x.kind === 'old') {
+          row.push(safeVal(m.oldValues ? m.oldValues[x.col] : ''));
+        } else {
+          row.push(safeVal(m.oldValues ? m.oldValues[x.col] : ''));
+        }
       });
+      var changedNames = (m.changedCols || []).filter(function (c) { return c.indexOf('旧_') !== 0; });
+      row.push('修改：' + changedNames.join('、'));
+      row.push(m.newRow);
+      row.push(m.oldRow);
       ws.addRow(row);
     });
 
-    applyMeta(ws, meta, 3, 1, headers.length);
+    applyMeta(ws, meta, 0, 1, headers.length);
     styleHeaderRow(ws, 1, headers.length);
-    styleSpecialCol(ws, 1, r.modified.length);
-    styleSpecialCol(ws, 2, r.modified.length);
-    styleSpecialCol(ws, 3, r.modified.length);
 
-    // 成对的"新/旧"列用同一种浅色底并加宽，方便一眼看出改动
+    // 元信息三列用特殊列样式（黄底），且位于末尾
+    var metaStart = layout.length + 1;
+    for (var k = 0; k < META.length; k++) styleSpecialCol(ws, metaStart + k, r.modified.length);
+
+    // 变化列与其 旧_ 列成对高亮：一眼看出哪几列动过
     var pairIdx = 0;
-    for (var i = 0; i < layout.length; i += 2) {
+    for (var i = 0; i < layout.length; i++) {
       var x1 = layout[i];
-      if (!x1 || x1.kind !== 'new') { continue; }
+      if (x1.kind !== 'new') continue;
       var x2 = layout[i + 1];
       if (!x2 || x2.kind !== 'old') continue;
       var color = PAIR_FILLS[pairIdx % PAIR_FILLS.length];
       pairIdx++;
-      [3 + i + 1, 3 + i + 2].forEach(function (colNo) {
+      [i + 1, i + 2].forEach(function (colNo) {
         var hc = ws.getRow(1).getCell(colNo);
         hc.fill = fillOf(color);
         hc.font = { bold: true, size: 10 };
@@ -225,6 +251,13 @@
     }
   }
 
+  /** 取某行的某一列值：优先变化表，回落到整行快照（未变的列只存在快照里） */
+  function cellOf(m, col) {
+    if (m.cells && Object.prototype.hasOwnProperty.call(m.cells, col)) return m.cells[col];
+    if (m.allCells && Object.prototype.hasOwnProperty.call(m.allCells, col)) return m.allCells[col];
+    return '';
+  }
+
   /**
    * 生成 _.删除 分表。
    * 列结构：[旧文件行号] + 旧文件全部列
@@ -232,20 +265,22 @@
   function addDeletedSheet(wb, r, meta) {
     if (!r.deleted.length) return;
     var ws = wb.addWorksheet(trimSheetName(r.sheet + '_删除'));
-    var headers = ['旧文件行号'].concat(r.oldHeaders && r.oldHeaders.length ? r.oldHeaders : r.headers);
-    ws.addRow(headers);
+    // 行号列放最后，与「新增」「修改」表同构
     var oldHeaders = r.oldHeaders && r.oldHeaders.length ? r.oldHeaders : r.headers;
+    var headers = oldHeaders.concat(['旧文件行号']);
+    ws.addRow(headers);
     r.deleted.forEach(function (item) {
-      var row = [item.oldRow];
+      var row = [];
       oldHeaders.forEach(function (h) { row.push(safeVal(item.cells[h])); });
+      row.push(item.oldRow);
       ws.addRow(row);
     });
-    applyMeta(ws, meta, 1, 1, headers.length);
+    applyMeta(ws, meta, 0, 1, headers.length);
     styleHeaderRow(ws, 1, headers.length);
-    styleSpecialCol(ws, 1, r.deleted.length);
-    // 删除行整体浅红底：一眼可辨
+    styleSpecialCol(ws, headers.length, r.deleted.length);
+    // 删除行整体浅红底：一眼可辨（数据列从第 1 列开始，行号列在最后不涂）
     for (var rr = 2; rr <= r.deleted.length + 1; rr++) {
-      for (var cc = 2; cc <= headers.length; cc++) {
+      for (var cc = 1; cc < headers.length; cc++) {
         ws.getRow(rr).getCell(cc).fill = fillOf(DEL_DATA_FILL);
       }
     }

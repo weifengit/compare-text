@@ -358,10 +358,12 @@ function t17() {
     assert.ok(names.indexOf('生产数据_新_源表头以上') >= 0, '应保留表头以上内容');
 
     var wsNew = wb.getWorksheet('生产数据_新增');
-    assert.strictEqual(wsNew.getCell('A1').value, '新文件行号');
-    assert.strictEqual(wsNew.getCell('B1').value, '提取方式', '表头应来自源文件（第 2 行）');
-    // 列宽还原（源 A 列 16）
-    assert.ok(Math.abs(wsNew.getColumn(2).width - 16) < 1, '列宽应还原 16，实际 ' + wsNew.getColumn(2).width);
+    // 列布局已统一为「数据列在前、行号列在后」（与修改表同构）
+    assert.strictEqual(wsNew.getCell('A1').value, '提取方式', '第 1 列应是源表首列（第 2 行表头）');
+    var lastCol = wsNew.columnCount;
+    assert.strictEqual(wsNew.getRow(1).getCell(lastCol).value, '新文件行号', '行号列应在最后');
+    // 列宽还原（源 A 列 16）——数据列不再有左侧偏移，所以直接对 A 列
+    assert.ok(Math.abs(wsNew.getColumn(1).width - 16) < 1, '列宽应还原 16，实际 ' + wsNew.getColumn(1).width);
     // 冻结窗格还原
     assert.ok(wsNew.views && wsNew.views[0] && wsNew.views[0].state === 'frozen', '冻结窗格应还原');
 
@@ -735,6 +737,67 @@ function t30() {
     'keepHost=true 时不应移除 sv-host 类');
 }
 
+function t31() {
+  // 改「修改」分表的列布局（对齐 aibg 今日关注监控对比的输出习惯）：
+  //   全部原始列按源表顺序保留（未变的列也要在）
+  //   → 变化列的「旧_xxx」紧跟在它自己原列后面
+  //   → [变化情况][新文件行号][旧文件行号] 放在最后
+  // 旧实现只输出变化列、且把行号列放最前，脱离上下文认不出是哪条记录。
+  var ExcelJS2 = require('../lib/exceljs.min.js');
+  var wb = new ExcelJS2.Workbook();
+  return wb.xlsx.load(fs.readFileSync(tmpFile('report.xlsx'))).then(function () {
+    var ws = wb.getWorksheet('生产数据_修改');
+    assert.ok(ws, '应有 生产数据_修改');
+
+    var hdrs = [];
+    for (var c = 1; c <= ws.columnCount; c++) hdrs.push(ws.getRow(1).getCell(c).value);
+
+    // ① 全部源表列都在（源表 5 列：提取方式/执行标准/生产日期/提取物批号/指标成分）
+    ['提取方式', '执行标准', '生产日期', '提取物批号', '指标成分'].forEach(function (h) {
+      assert.ok(hdrs.indexOf(h) >= 0, '修改表应保留未变化的列「' + h + '」，实际列: ' + JSON.stringify(hdrs));
+    });
+
+    // ② 元信息三列必须在最后，且顺序为 变化情况 → 新文件行号 → 旧文件行号
+    var n = hdrs.length;
+    assert.strictEqual(hdrs[n - 3], '变化情况', '倒数第 3 列应是 变化情况，实际 ' + hdrs[n - 3]);
+    assert.strictEqual(hdrs[n - 2], '新文件行号', '倒数第 2 列应是 新文件行号，实际 ' + hdrs[n - 2]);
+    assert.strictEqual(hdrs[n - 1], '旧文件行号', '倒数第 1 列应是 旧文件行号，实际 ' + hdrs[n - 1]);
+
+    // ③ 旧_xxx 紧跟对应列
+    var iNew = hdrs.indexOf('指标成分');
+    assert.ok(iNew >= 0, '应有 指标成分 列');
+    assert.strictEqual(hdrs[iNew + 1], '旧_指标成分',
+      '旧_指标成分 应紧跟在 指标成分 之后，实际下一个是 ' + hdrs[iNew + 1]);
+
+    // ④ 数值正确：新值在 指标成分，旧值在 旧_指标成分
+    assert.strictEqual(String(ws.getRow(2).getCell(iNew + 1).value), '97.5');
+    assert.strictEqual(String(ws.getRow(2).getCell(iNew + 2).value), '97.0');
+
+    // ⑤ 未变化的列也要有值（说明取的是整行快照，而不是只取变化列）
+    var iBatch = hdrs.indexOf('提取物批号');
+    assert.ok(iBatch >= 0, '应有 提取物批号 列');
+    assert.strictEqual(String(ws.getRow(2).getCell(iBatch + 1).value), 'P002',
+      '未变化的列也要输出值，实际 ' + ws.getRow(2).getCell(iBatch + 1).value);
+
+    // ⑥ 变化情况只列真正变化的列名（不含 旧_ 标记）
+    var iChg = hdrs.indexOf('变化情况');
+    var chg = String(ws.getRow(2).getCell(iChg + 1).value);
+    assert.ok(chg.indexOf('指标成分') >= 0, '变化情况应含 指标成分，实际 ' + chg);
+    assert.ok(chg.indexOf('旧_') < 0, '变化情况不应含 旧_ 标记，实际 ' + chg);
+
+    // ⑦ 新增 / 删除 分表也必须是「数据列在前、行号列在后」的同构布局
+    var wsAdd = wb.getWorksheet('生产数据_新增');
+    var addLast = wsAdd.getRow(1).getCell(wsAdd.columnCount).value;
+    assert.strictEqual(addLast, '新文件行号', '新增分表的行号列应在最后，实际 ' + addLast);
+    assert.strictEqual(wsAdd.getCell('A1').value, '提取方式', '新增分表第 1 列应是源表首列');
+
+    var wsDel = wb.getWorksheet('生产数据_删除');
+    var delLast = wsDel.getRow(1).getCell(wsDel.columnCount).value;
+    assert.strictEqual(delLast, '旧文件行号', '删除分表的行号列应在最后，实际 ' + delLast);
+    assert.strictEqual(wsDel.getCell('A1').value, '提取方式', '删除分表第 1 列应是源表首列');
+  });
+}
+
 // ---- 跑 ----
 // 用 check() 统一串起来：每个用例独立记 ok/FAIL，任何一个失败不影响后面的用例继续跑
 // （早期版本把所有用例串成一条 Promise 链，第一个失败就会中断，看不到后续结果）。
@@ -769,7 +832,8 @@ var CASES = [
   ['回归：短列名剥掉重复前缀', t27],
   ['回归：宽表每行列数受限 + 折叠提示', t28],
   ['回归：切 sheet 联动主区域3（onSheetChange）', t29],
-  ['回归：仅单侧存在的 sheet 有明确提示', t30]
+  ['回归：仅单侧存在的 sheet 有明确提示', t30],
+  ['报告：修改表保留全部列，旧值紧随原列，行号置末', t31]
 ];
 
 // ★ 先等 ready（造临时 xlsx）落地，否则后面的读取用例会 ENOENT
