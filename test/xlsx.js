@@ -871,7 +871,7 @@ function t32() {
 }
 
 function t33() {
-  // 综合变更 sheet（_变更汇总）：新增/修改/删除三类融合一张表，用背景色醒目区分；
+  // 综合变更 sheet（_变更汇总）：新增/修改/删除/未变化 四类融合一张表，用背景色醒目区分；
   // 修改行被改单元格显示「旧值 → 新值」并加粗强调；键列保持中性底。
   var ExcelJS2 = require('../lib/exceljs.min.js');
   var wb = new ExcelJS2.Workbook();
@@ -888,7 +888,7 @@ function t33() {
     assert.strictEqual(hdrs[n - 2], '旧文件行号');
     assert.strictEqual(hdrs[n - 1], '变化情况');
 
-    // 三类都出现：新增/修改/删除 至少各一行
+    // 四类都出现：新增/修改/删除/未变化 至少各一行
     var cats = {};
     for (var r = 2; r <= ws.rowCount; r++) {
       var cV = ws.getRow(r).getCell(1).value;
@@ -897,6 +897,7 @@ function t33() {
     assert.ok(cats['新增'] > 0, '应含 新增 行');
     assert.ok(cats['修改'] > 0, '应含 修改 行');
     assert.ok(cats['删除'] > 0, '应含 删除 行');
+    assert.ok(cats['未变化'] > 0, '应含 未变化 行（未变化记录也要收录）');
 
     // 自定义断言工具（兼容旧 Node）
     function cellFill(rr, cc) {
@@ -926,16 +927,18 @@ function t33() {
 
     // 新增行整行浅绿
     // 删除行整行浅红
-    var foundAdd = false, foundDel = false;
+    var foundAdd = false, foundDel = false, foundSame = false;
     for (var x = 2; x <= ws.rowCount; x++) {
       var cat = String(ws.getRow(x).getCell(1).value);
       // 该行第一个非键数据列（列 3）应有底色
       var f3 = cellFill(x, 3);
       if (cat === '新增') { foundAdd = true; assert.strictEqual(f3, 'FFE7F8EE', '新增行应为浅绿，实际 ' + f3); }
       if (cat === '删除') { foundDel = true; assert.strictEqual(f3, 'FFFFEEF0', '删除行应为浅红，实际 ' + f3); }
+      if (cat === '未变化') { foundSame = true; assert.strictEqual(f3, 'FFF5F5F5', '未变化行应为中性浅灰，实际 ' + f3); }
     }
     assert.ok(foundAdd, '应有新增行');
     assert.ok(foundDel, '应有删除行');
+    assert.ok(foundSame, '应有未变化行');
 
     // 冻结：表头 + 类别列
     var views = ws.views || [];
@@ -982,7 +985,7 @@ var CASES = [
   ['回归：仅单侧存在的 sheet 有明确提示', t30],
   ['报告：修改表保留全部列，旧值紧随原列，行号置末', t31],
   ['报告：表头居中换行且行高合适，列宽沿用源文件', t32],
-  ['报告：综合变更 sheet 融合三类并醒目配色', t33]
+  ['报告：综合变更 sheet 融合四类并醒目配色', t33]
 ];
 
 // ★ 先等 ready（造临时 xlsx）落地，否则后面的读取用例会 ENOENT
