@@ -678,7 +678,7 @@ html, body {
 .picker-mask.busy .picker-body { opacity: .55; pointer-events: none; }
 .picker {
   width: min(560px, 92vw);
-  max-height: 78vh;
+  height: min(520px, 80vh);   /* 固定高度：不随文件夹内容多少而变化 */
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -716,8 +716,8 @@ html, body {
 .picker-body {
   overflow: auto;
   padding: 4px 8px 10px;
-  min-height: 160px;
-  max-height: 48vh;
+  flex: 1 1 auto;        /* 填满弹层剩余高度，总高保持固定 */
+  min-height: 0;
   font-family: var(--mono);
   font-size: 12.5px;
 }
