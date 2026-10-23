@@ -1,0 +1,18 @@
+{
+  "title": "合同修订对比报告（PDF）",
+  "pairs": [
+    {
+      "left": "/Users/sonoma/code/compare-text/软著申请材料/演示文件/01-文档对比/合同-草案.pdf",
+      "right": "/Users/sonoma/code/compare-text/软著申请材料/演示文件/01-文档对比/合同-修订.pdf"
+    }
+  ],
+  "options": {
+    "ignoreCase": true,
+    "ignoreEol": true,
+    "ignoreWhitespace": true,
+    "ignoreNewline": true,
+    "ignoreWidth": true,
+    "ignorePunct": true
+  },
+  "output": "/Users/sonoma/code/compare-text/软著申请材料/演示文件/04-报告产物/对比报告-合同.pdf.html"
+}
