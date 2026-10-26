@@ -119,6 +119,7 @@ function esc(s) {
 
 function itemToHtml(it) {
   switch (it.t) {
+    case 'pagebreak': return '<div style="page-break-before:always;break-before:page;height:0"></div>';
     case 'h1': return '<div class="h1">' + esc(it.text) + '</div>';
     case 'h2': return '<div class="h2">' + esc(it.text) + '</div>';
     case 'h3': return '<div class="h3">' + esc(it.text) + '</div>';
@@ -224,6 +225,7 @@ function buildDocx(pages) {
       if (it.t === 'table') {
         return { t: 'table', widths: it.widths, head: it.head || 0, rows: it.rows, size: 19 };
       }
+      if (it.t === 'pagebreak') return { t: 'pagebreak' };
       if (it.t === 'bullets') return { t: 'bullets', items: it.items };
       if (it.t === 'code') return { t: 'code', text: it.text };
       return { t: it.t, text: it.text };

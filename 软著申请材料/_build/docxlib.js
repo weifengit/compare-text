@@ -347,6 +347,14 @@ DocxBuilder.prototype._bodyXml = function () {
         return;
       }
 
+      // 强制换页标记：只输出一个分页符，不占正文行
+      if (it.t === 'pagebreak') {
+        body.push('<w:p><w:pPr><w:widowControl w:val="0"/>' +
+          '<w:spacing w:before="0" w:after="0" w:line="120" w:lineRule="exact"/></w:pPr>' +
+          '<w:r><w:br w:type="page"/></w:r></w:p>');
+        return;
+      }
+
       // 段落类：h1 / h2 / h3 / p / note / caption / code
       var style = {
         h1: { sz: 36, bold: true, before: 0, after: 240, align: 'center' },

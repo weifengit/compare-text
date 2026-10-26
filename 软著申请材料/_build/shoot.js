@@ -470,10 +470,73 @@ var SCENES = [
       await poll('(function(){var st=document.getElementById("status");' +
         'var t=st?st.textContent:"";return t.indexOf("OCR 识别完成")>=0;})()',
         function (v) { return v === true; }, 240, 'OCR 完成');
-      await wait(1500);
+      await wait(1000);
+      // 左侧识别落定后再加载右侧，同样会弹确认框 → 识别
+      await pickFile('R', '票据-扫描件B.pdf');
+      await wait(2500);
+      var rightOcr = await evaluate('(function(){var m=document.getElementById("ocrMask");return !!(m&&!m.hidden);})()');
+      if (rightOcr) {
+        await click('#ocrGoBtn');
+        await poll('(function(){var st=document.getElementById("status");' +
+          'var t=st?st.textContent:"";return t.indexOf("OCR 识别完成")>=0;})()',
+          function (v) { return v === true; }, 240, '右侧 OCR 完成');
+      } else {
+        // 缓存命中：直接完成，无需再次确认
+        console.log('  右侧命中 OCR 缓存，无需再次识别');
+      }
+      await wait(2500);
       await shot('15-扫描版PDF识别完成', fullClip());
     }
   },
+  {
+    id: '17', name: '17-导出Excel报告', desc: '把导出的 Excel 报告读回应用并渲染「对比总览」工作表',
+    run: async function () {
+      await freshPage();
+      // 先跑一次表格对比，让 XlsxFlow 内部持有结果与格式元数据
+      console.log('  ' + await driveXlsx('库存台账-旧.xlsx', '库存台账-新.xlsx'));
+      await wait(2000);
+      // 生成报告字节并在页面内读回渲染（不落地，避免打断截图）
+      var out = await evaluate('(function(){' +
+        'return XlsxFlow.exportReport("库存台账-差异报告").then(function(r){' +
+        'var bytes=r.bytes;' +
+        'return XlsxIO.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))' +
+        '.then(function(wb){' +
+        'var names=wb.sheetNames;' +
+        'var target=names.indexOf("对比总览")>=0?"对比总览":names[0];' +
+        'var sheet=XlsxIO.extractSheet(wb.sheet(target),{});' +
+        'if(!sheet)return "no-sheet";' +
+        'var s=document.createElement("style");s.textContent=' +
+        '"#editors,#editorsResize,#results,#resultsResize{display:none!important}";' +
+        'document.head.appendChild(s);' +
+        'SheetView.init({left:document.getElementById("pdfLeft"),' +
+        'right:document.getElementById("pdfRight")});' +
+        'SheetView.load("L",sheet);' +
+        'var pa=document.getElementById("pdfarea");pa.classList.remove("hidden");' +
+        'var st=document.getElementById("status");' +
+        'st.textContent="导出的 Excel 报告 · "+target+" 工作表";' +
+
+        'return "ok:"+target+" sheets="+names.join(",");' +
+        '});}).catch(function(e){return "err:"+e.message;});})()');
+      console.log('  报告渲染：' + out);
+      await wait(2500);
+      await shot(this.name, fullClip());
+      // 同时把报告落盘到演示目录，供手册提及
+      await evaluate('(function(){' +
+        'return XlsxFlow.exportReport("库存台账-差异报告").then(function(r){' +
+        'var a=new Uint8Array(r.bytes.buffer.slice(r.bytes.byteOffset, r.bytes.byteOffset+r.bytes.byteLength));' +
+        'var s="";for(var i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);' +
+        'return btoa(s);' +
+        '});})()').then(function (b64) {
+        if (b64) {
+          var dir = path.join(DEMO, '06-Excel报告产物');
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, '库存台账-差异报告.xlsx'), Buffer.from(b64, 'base64'));
+          console.log('  报告已写入 演示文件/06-Excel报告产物/');
+        }
+      });
+    }
+  },
+
   {
     id: '16', name: '16-对比源选择纯文本文件', desc: '通过对比源选择两个 .txt 文件对比（顶部筛选区联动）',
     run: async function () {
