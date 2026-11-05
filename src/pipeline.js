@@ -48,7 +48,7 @@
     if (typeof cfg.getText !== 'function') cfg.getText = function () { return ''; };
     if (typeof cfg.getOptions !== 'function') cfg.getOptions = function () { return {}; };
     var fns = ['setBusy', 'toast', 'onResult', 'onRendered', 'onPanelText', 'onPanelsChanged', 'onPlaceholder',
-      'onScannedPdf', 'onOcrProgress', 'onOcrState'];
+      'onScannedPdf', 'onOcrProgress', 'onOcrState', 'onStyleResult'];
     for (var i = 0; i < fns.length; i++) {
       if (typeof cfg[fns[i]] !== 'function') cfg[fns[i]] = function () {};
     }
@@ -415,6 +415,8 @@
     var host = p && p.firstChild;
     var isDocx = !!(host && (' ' + (host.className || '') + ' ').indexOf(' docx-host ') >= 0);
     if (isDocx && typeof DocxView !== 'undefined' && DocxView.isLoaded && DocxView.isLoaded(side) && DocxView.lineAtOffset) return DocxView;
+    var isWeb = !!(host && String(host.className || '').indexOf('web-frame') >= 0);
+    if (isWeb && typeof WebView !== 'undefined' && WebView.isLoaded && WebView.isLoaded(side) && WebView.lineAtOffset) return WebView;
     if (PdfView.isLoaded && PdfView.isLoaded(side) && PdfView.lineAtOffset) return PdfView;
     return null;
   }
@@ -484,6 +486,243 @@
     updateMapMatches();
   }
 
+  // ---------- 网页源（URL 直连 / 本地 HTML 快照）与样式核对 ----------
+  // 每侧记录「这一侧现在装的是什么」，样式核对要靠它判断哪侧是原稿、哪侧是落地文档。
+  var sourceKind = { L: null, R: null };
+  var webSource = { L: null, R: null };      // { markup, url, containerId }
+  var styleBasis = 'source';                 // 'source' 原稿声明 | 'spec' 期望样式表
+  var styleSpec = null;
+  var styleSpecName = '';
+
+  /** 政务 CMS 把正文放在这些 id 里，按具体程度排；命中第一个即用，都不中则整页 body */
+  var CONTENT_IDS = ['content_zw', 'vsb_content', 'article_content', 'zoom', 'jzoom',
+    'ccontent', 'zoomcontent', 'article', 'content', 'main'];
+
+  function isWebSource(ref) {
+    return /^https?:\/\//i.test(ref) || /\.(html?|htm)$/i.test(ref);
+  }
+
+  /**
+   * 本地 HTML 快照要能还原"网页看起来的样子"，就得知道它来自哪个站——
+   * 相对 ``/css/reset.css`` 没有 origin 就无从解析。
+   * 优先用政府站点必带的 ``<meta name="SiteDomain">``（全国政府网站考核指标字段），
+   * 退化到页面里出现的第一个绝对/协议相对站点地址；都拿不到就只按默认样式渲染，
+   * 并在面板写明"外链样式未内联"——不静默给出一张没样式的图骗人。
+   */
+  function guessSiteOrigin(markup) {
+    var text = String(markup || '');
+    var meta = /<meta[^>]+name=["']SiteDomain["'][^>]+content=["']([^"']+)["']/i.exec(text)
+      || /<meta[^>]+content=["']([^"']+)["'][^>]*name=["']SiteDomain["']/i.exec(text);
+    if (meta && meta[1]) return 'https://' + meta[1].trim() + '/';
+    var abs = /https?:\/\/([a-z0-9.-]*gd\.gov\.cn|[a-z0-9.-]+\.gov\.cn)/i.exec(text);
+    if (abs) return 'https://' + abs[1] + '/';
+    var proto = /["']\/\/([a-z0-9.-]+)\//i.exec(text);
+    return proto ? 'https://' + proto[1] + '/' : '';
+  }
+
+  function detectContainerId(markup) {
+    var text = String(markup || '');
+    for (var i = 0; i < CONTENT_IDS.length; i++) {
+      if (text.indexOf('id="' + CONTENT_IDS[i] + '"') >= 0 || text.indexOf("id='" + CONTENT_IDS[i] + "'") >= 0) {
+        return CONTENT_IDS[i];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 字节 → 文本。字符集先看响应头，没有就粗解一次从 ``<meta charset>`` 找。
+   * 为什么在服务端不解：浏览器 TextDecoder 连 gbk 都支持，而 Node 侧要引 iconv 依赖；
+   * 代理保持字节透传，解码口径统一放在真正要显示它的一侧。
+   */
+  function decodeHtmlBytes(buf, contentType) {
+    var charset = /charset=["']?([\w-]+)/i.exec(contentType || '');
+    if (!charset) {
+      var sniff = '';
+      try { sniff = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(buf.slice(0, 4096))); } catch (e) { /* 忽略 */ }
+      var meta = /<meta[^>]+charset=["']?([\w-]+)/i.exec(sniff);
+      if (meta) charset = [0, meta[1]];
+    }
+    var label = (charset && charset[1] ? String(charset[1]) : 'utf-8').toLowerCase();
+    try {
+      return new TextDecoder(label, { fatal: false }).decode(buf);
+    } catch (e) {
+      return new TextDecoder('utf-8', { fatal: false }).decode(buf);
+    }
+  }
+
+  /** 经 /api/fetch 代理取原始字节（同源代理绕开 CORS，并复用服务端 24h 缓存）。
+   *  HTML 与 CSS 的字符集口径不同，解码交给各自的包装函数。 */
+  function fetchBytes(url, nocache) {
+    if (typeof fetch !== 'function') return Promise.reject(new Error('当前环境没有 fetch，请用本地 HTML 快照'));
+    var api = '/api/fetch?url=' + encodeURIComponent(url) + (nocache ? '&nocache=1' : '');
+    return fetch(api).then(function (res) {
+      return res.arrayBuffer().then(function (buf) {
+        if (!res.ok) {
+          var detail = '';
+          try { detail = JSON.parse(new TextDecoder('utf-8').decode(buf)).error || ''; } catch (e) { /* 忽略 */ }
+          throw new Error(detail || ('HTTP ' + res.status));
+        }
+        return {
+          buf: buf,
+          contentType: res.headers.get('Content-Type') || '',
+          finalUrl: decodeURIComponent(res.headers.get('X-Fetch-Url') || url),
+          cached: res.headers.get('X-Fetch-Cache') === 'hit'
+        };
+      });
+    });
+  }
+
+  /** 网页：字符集先看响应头，没有就粗解一次从 ``<meta charset>`` 找 */
+  function fetchHtml(url, nocache) {
+    return fetchBytes(url, nocache).then(function (r) {
+      return { markup: decodeHtmlBytes(r.buf, r.contentType), finalUrl: r.finalUrl, cached: r.cached };
+    });
+  }
+
+  /**
+   * 外链资源（CSS）：字符集只认响应头 + 文件头的 ``@charset``。
+   * 为什么不复用 decodeHtmlBytes：它会去 HTML 里找 ``<meta charset>``，CSS 里没有，
+   * 而且万一命中同目录的注释/正文反而选错字符集，把整张样式表解成乱码（比没样式更难查）。
+   */
+  function decodeAssetBytes(buf, contentType) {
+    var charset = /charset=["']?([\w-]+)/i.exec(contentType || '');
+    if (!charset) {
+      var head = '';
+      try { head = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(buf.slice(0, 1024))); } catch (e) { /* 忽略 */ }
+      var at = /@charset\s+["']([\w-]+)["']/i.exec(head);
+      if (at) charset = [0, at[1]];
+    }
+    var label = (charset && charset[1] ? String(charset[1]) : 'utf-8').toLowerCase();
+    try {
+      return new TextDecoder(label, { fatal: false }).decode(buf);
+    } catch (e) {
+      return new TextDecoder('utf-8', { fatal: false }).decode(buf);
+    }
+  }
+
+  function fetchAssetText(url) {
+    return fetchBytes(url).then(function (r) {
+      return { text: decodeAssetBytes(r.buf, r.contentType), finalUrl: r.finalUrl, cached: r.cached };
+    });
+  }
+
+  /** 同侧只保留一种渲染：换源前把另外两个查看器清掉（与 PDF/docx 分支同一约定） */
+  function clearOtherViewers(side, keep) {
+    ['PdfView', 'DocxView', 'WebView'].forEach(function (name) {
+      var view = root[name];
+      if (view && name !== keep && view.clear) view.clear(side);
+    });
+  }
+
+  function loadWebSide(side, ref, my, stale, extra) {
+    clearOtherViewers(side, 'WebView');
+    sourceKind[side] = 'web';
+    webSource[side] = null;
+    var ready = /^https?:/i.test(ref)
+      ? fetchHtml(ref)
+      : Source.fileUrl(ref).then(function (url) {
+        return fetch(url).then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status + (res.status === 404 ? '（文件不存在）' : ''));
+          return res.arrayBuffer();
+        }).then(function (buf) {
+          // 解码一次就够：origin 推断要在同一段文本上做
+          var markup = decodeHtmlBytes(buf, '');
+          return { markup: markup, finalUrl: guessSiteOrigin(markup), cached: false };
+        });
+      });
+    ready.then(function (res) {
+      if (stale()) return;
+      var containerId = extra.containerId || detectContainerId(res.markup);
+      webSource[side] = { markup: res.markup, url: res.finalUrl || ref, containerId: containerId };
+      return root.WebView.load(side, res.markup, {
+        baseUrl: res.finalUrl || (/^https?:/i.test(ref) ? ref : ''),
+        originBase: guessSiteOrigin(res.markup),
+        containerId: containerId,
+        inlineAssets: extra.inlineAssets !== false,
+        token: my,
+        fetchText: function (assetUrl) { return fetchAssetText(assetUrl).then(function (r) { return r.text; }); }
+      }).then(function () {
+        if (stale()) return;
+        var vectors = root.WebView.styleVectors(res.markup, { containerId: containerId });
+        var text = root.WebView.vectorsText(vectors);
+        root.WebView.setSourceText(side, text);
+        cfg.onPanelText(side, text);
+        cfg.onPanelsChanged();
+      });
+    }).catch(function (err) {
+      if (stale()) return;
+      if (root.WebView.showError) root.WebView.showError(side, err);
+      cfg.toast('加载网页失败：' + ((err && err.message) || err), true);
+    });
+  }
+
+  /** docx 侧 → 样式向量：从已加载的字节里读 OOXML，不重新取文件 */
+  function docxVectorsOf(side) {
+    if (sourceKind[side] !== 'docx' || typeof DocxView === 'undefined' || !DocxView.bufferOf) {
+      return Promise.reject(new Error('该侧不是 docx（当前：' + (sourceKind[side] || '空') + '）'));
+    }
+    var buffer = DocxView.bufferOf(side);
+    if (!buffer) return Promise.reject(new Error('该侧 docx 尚未加载完成'));
+    var JS = root.JSZip;
+    if (!JS || !JS.loadAsync) return Promise.reject(new Error('JSZip 未加载，无法读取 docx 样式'));
+    return JS.loadAsync(buffer).then(function (zip) {
+      var doc = zip.file('word/document.xml'), styles = zip.file('word/styles.xml');
+      if (!doc) throw new Error('docx 里没有 word/document.xml');
+      return Promise.all([doc.async('string'), styles ? styles.async('string') : '']);
+    }).then(function (parts) {
+      return root.WebStyle.docxVectors(parts[0], parts[1]);
+    });
+  }
+
+  /**
+   * 样式核对：网页侧的**原稿声明**（或期望样式表）为基准，比 docx 侧的实际落地。
+   * 为什么基准不用浏览器渲染值：站点的字号声明被编辑器写成 ``:10pt``，浏览器丢掉后
+   * 整篇压成同一个字号——照渲染比等于要求 Word 复刻一个坏版式。详见 src/webstyle.js 头注释。
+   */
+  function styleCheck(opts) {
+    var options = opts || {};
+    var webSide = options.webSide || (webSource.L ? 'L' : (webSource.R ? 'R' : null));
+    var docSide = options.docSide || (webSide === 'L' ? 'R' : 'L');
+    if (!webSide || !webSource[webSide]) {
+      return Promise.resolve({ ok: false, error: '没有网页侧：请把 URL 或 HTML 快照加载到一侧后再核对' });
+    }
+    if (!root.WebStyle) return Promise.resolve({ ok: false, error: 'webstyle.js 未加载' });
+    var source = root.WebStyle.htmlVectors(webSource[webSide].markup,
+      { containerId: webSource[webSide].containerId });
+    var expected = (styleBasis === 'spec' && styleSpec) ? root.WebStyle.specVectors(styleSpec, source) : source;
+    return docxVectorsOf(docSide).then(function (actual) {
+      var result = root.WebStyle.compareVectors(actual, expected, options);
+      result.ok = true;
+      result.basis = (styleBasis === 'spec' && styleSpec) ? 'spec' : 'source';
+      result.basisName = (result.basis === 'spec' ? (styleSpecName || '期望样式表') : '原稿声明');
+      result.webSide = webSide;
+      result.docSide = docSide;
+      result.containerId = webSource[webSide].containerId;
+      result.summary = root.WebStyle.summarize(result);
+      if (cfg.onStyleResult) cfg.onStyleResult(result);
+      return result;
+    }).catch(function (err) {
+      var failed = { ok: false, error: String((err && err.message) || err) };
+      if (cfg.onStyleResult) cfg.onStyleResult(failed);
+      return failed;
+    });
+  }
+
+  function setStyleBasis(basis, spec, name) {
+    styleBasis = basis === 'spec' ? 'spec' : 'source';
+    if (spec !== undefined) { styleSpec = spec; styleSpecName = name || ''; }
+    return { basis: styleBasis, specName: styleSpecName };
+  }
+
+  function styleState() {
+    return {
+      basis: styleBasis, specName: styleSpecName, hasSpec: !!styleSpec,
+      web: { L: !!webSource.L, R: !!webSource.R },
+      kinds: { L: sourceKind.L, R: sourceKind.R }
+    };
+  }
+
   // ---------- 文件加载（主区域3 面板 + 该侧编辑区文本） ----------
   /** 作废某侧在途加载（左右互换 / 该侧重新选文件）；同时取消该侧在途 OCR */
   function invalidateSide(side) {
@@ -491,6 +730,8 @@
     if (ocrState[side] === 'running' || ocrState[side] === 'pending') setOcrState(side, 'idle');
     ocrSeq++;                        // 作废在途 OCR（runOcr 内部检查 my === ocrSeq）
     ocrPathBySide[side] = null;      // 作废已登记的 OCR 路径（避免缓存写到旧文件）
+    webSource[side] = null;
+    sourceKind[side] = null;
   }
   /** 作废两侧在途加载（切换标签页 / 恢复会话）；同时取消全部在途 OCR */
   function invalidateAll() {
@@ -498,6 +739,8 @@
     ocrSeq++;                        // 作废在途 OCR
     ['L', 'R'].forEach(function (s) { if (ocrState[s] === 'running' || ocrState[s] === 'pending') setOcrState(s, 'idle'); });
     ocrPathBySide.L = null; ocrPathBySide.R = null;
+    webSource.L = null; webSource.R = null;
+    sourceKind.L = null; sourceKind.R = null;
   }
   /** 取消在途 OCR（UI 取消按钮）。 */
   function cancelOcr() {
@@ -525,10 +768,17 @@
 
   /** 把文件加载到该侧：主区域3 渲染（PDF / Word），并把提取文本写进该侧编辑区。
    *  同侧新加载会作废在途加载；跨侧互不干扰。（编辑区写入与字段下拉由 cfg.onPanelText 承担） */
-  function loadSide(side, absPath) {
+  function loadSide(side, absPath, webOpts) {
     if (!absPath || !Source.fileUrl) return;
     var my = ++fileSeq[side];                  // 本次加载令牌：同侧新加载作废旧加载
     function stale() { return my !== fileSeq[side]; }
+    // 网页源（URL 或本地 .html）先行：它不走 fileUrl 的 MIME 分支，也不参与 OCR
+    if (isWebSource(absPath) && root.WebView && root.WebStyle) {
+      loadWebSide(side, absPath, my, stale, webOpts || {});
+      return;
+    }
+    sourceKind[side] = /\.pdf$/i.test(absPath) ? 'pdf'
+      : (/\.docx$/i.test(absPath) ? 'docx' : (/\.(xlsx|xlsm|xls)$/i.test(absPath) ? 'xlsx' : 'text'));
     // fileUrl 返回 Promise（Tauri 模式需先经 Rust 读字节转 Blob URL）
     Source.fileUrl(absPath).then(function (url) {
       if (stale()) return;
@@ -886,6 +1136,19 @@
     cancelOcr: cancelOcr,
     hasPendingOcr: hasPendingOcr,
     getOcrPendingSide: getOcrPendingSide,
-    getOcrState: getOcrState
+    getOcrState: getOcrState,
+    // 网页源与样式核对
+    isWebSource: isWebSource,
+    detectContainerId: detectContainerId,
+    decodeHtmlBytes: decodeHtmlBytes,
+    fetchHtml: fetchHtml,
+    fetchAssetText: fetchAssetText,
+    decodeAssetBytes: decodeAssetBytes,
+    guessSiteOrigin: guessSiteOrigin,
+    styleCheck: styleCheck,
+    setStyleBasis: setStyleBasis,
+    styleState: styleState,
+    docxVectorsOf: docxVectorsOf,
+    sourceKindOf: function (side) { return sourceKind[side]; }
   };
 })(typeof self !== 'undefined' ? self : this);

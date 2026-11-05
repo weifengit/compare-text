@@ -519,6 +519,9 @@
   root.DocxView = {
     init: init, load: load, extractText: extractText, clear: clear,
     isLoaded: isLoaded, swap: swap, showError: showError,
+    // 该侧已加载的原始字节：样式核对要从 zip 里读 document.xml / styles.xml，
+    // 不重新取文件（同一份文档不该被两条链路各读一遍，读出不一致更难查）
+    bufferOf: function (side) { return bufs[side] || null; },
     setSourceText: setSourceText, extractPanel: extractPanel, setHighlight: setHighlight,
     // 行号 ↔ 滚动像素（供 app.js 的行锚定适配器使用；与 PdfView 同名同语义）
     lineOffset: lineOffset, lineAtOffset: lineAtOffset, lineHeight: lineHeightAtLine,

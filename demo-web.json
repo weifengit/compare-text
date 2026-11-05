@@ -1,0 +1,10 @@
+{
+  "title": "广东中药材标准 · 网页原稿 vs 还原 docx",
+  "pairs": [
+    {
+      "left": "test/fixtures/gdherb-std.html",
+      "right": "test/fixtures/gdherb-std.docx"
+    }
+  ],
+  "output": "demo/report-web.html"
+}

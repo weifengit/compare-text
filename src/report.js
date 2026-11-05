@@ -62,6 +62,22 @@
     '.rep-grid .row.change-r{background:var(--add-bg)}' +
     '.hl.rm{background:var(--del-strong);color:var(--del-text)}' +
     '.hl.ad{background:var(--add-strong);color:var(--add-text)}.hl.eq{background:transparent}' +
+    '.rep-style{border:1px solid var(--border);border-top:0;padding:8px 10px;background:var(--panel)}' +
+    '.rep-style h2{margin:4px 0 8px;font-size:14px}' +
+    '.rep-style-basis{font-weight:400;font-size:12px;color:#667}' +
+    '.rep-style-bar{display:inline-block;padding:4px 10px;border-radius:4px;font-size:12px;margin-bottom:8px}' +
+    '.rep-style-bar.ok{background:#e7f8ee;color:#1c7d43}' +
+    '.rep-style-bar.bad{background:#ffeef0;color:#c0392b}' +
+    '.rep-style-note{font-size:12px;color:#667;margin-top:6px}' +
+    '.rep-stylebox{max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:4px}' +
+    'table.rep-styletable{width:100%;border-collapse:collapse;font-size:12px}' +
+    'table.rep-styletable th,table.rep-styletable td{padding:4px 8px;border-bottom:1px solid #eef1f4;' +
+    'text-align:left;vertical-align:top}' +
+    'table.rep-styletable th{background:#fafbfc;position:sticky;top:0}' +
+    'table.rep-styletable td.c{width:52px;color:#8892a0;font-family:var(--mono)}' +
+    'table.rep-styletable td.v{width:96px;font-family:var(--mono)}' +
+    'table.rep-styletable td.v.bad{color:#c0392b}' +
+    'table.rep-styletable td.t{color:#445;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
     '.rep-shots{border:1px solid var(--border);border-top:0;border-radius:0 0 6px 6px;' +
     'background:var(--panel);padding:0 10px 6px}.rep-shots h2{margin:12px 0 8px}' +
     '.rep-shotcols{display:grid;grid-template-columns:1fr 1fr;gap:10px}' +
@@ -312,6 +328,42 @@
   }
 
   /** 单对正文：头部摘要 + 双视图（左右分栏 / Redline 合并）+ 区域3 左/右快照 */
+  /**
+   * 样式核对块：基准名 + 统计条 + 差异表。
+   * 没有样式数据（两侧都不是网页）就整块不出现——报告里不该有空的"核对通过"占位，
+   * 那会让人以为核对跑过了。
+   */
+  function styleHtml(pair) {
+    var s = pair.style;
+    if (!s) return '';
+    var head = '<div class="rep-style"><h2>样式核对';
+    if (s.basis) head += ' <span class="rep-style-basis">基准：' + escHtml(s.basis) + '</span>';
+    head += '</h2>';
+    if (s.error) return head + '<div class="rep-empty">' + escHtml(s.error) + '</div></div>';
+    var sum = s.summary || {};
+    var bar = '<div class="rep-style-bar ' + (sum.total ? 'bad' : 'ok') + '">'
+      + (sum.total ? ('差异 ' + sum.total + ' 处') : '无版式差异')
+      + ' ｜ 对齐 ' + (sum.aligned || 0) + ' 段'
+      + (sum.onlyActual ? ' ｜ 仅文档有 ' + sum.onlyActual : '')
+      + (sum.onlyExpected ? ' ｜ 仅原稿有 ' + sum.onlyExpected : '')
+      + (sum.byProp ? ' ｜ ' + escHtml(sum.byProp) : '') + '</div>';
+    if (!sum.total) {
+      return head + bar + '<div class="rep-style-note">按基准逐段核对字号、中文字体、对齐、'
+        + '首行缩进、行距、上下标——全部一致。</div></div>';
+    }
+    var rows = (s.diffs || []).map(function (d) {
+      return '<tr><td class="c">' + d.para + '</td><td>' + escHtml(d.prop) + '</td>'
+        + '<td class="v">' + escHtml(d.expect) + '</td>'
+        + '<td class="v bad">' + escHtml(d.actual) + '</td>'
+        + '<td class="t" title="' + escHtml(d.text) + '">' + escHtml(d.text) + '</td></tr>';
+    }).join('');
+    return head + bar + '<div class="rep-stylebox"><table class="rep-styletable"><thead><tr>'
+      + '<th>段落</th><th>属性</th><th>基准值</th><th>实际值</th><th>段落摘要</th></tr></thead>'
+      + '<tbody>' + rows + '</tbody></table>'
+      + (s.truncated ? '<div class="rep-style-note">差异过多，仅列出前 400 处。</div>' : '')
+      + '</div></div>';
+  }
+
   function pairHtml(pair, idx) {
     var res = pair.result || {};
     var L = '', R = '', RL = '';
@@ -372,6 +424,7 @@
       '<div class="rep-view rep-view-redline" hidden><div class="rep-redline">' + RL + '</div></div>' +
       '</div>' +
       rawHtml +
+      styleHtml(pair) +
       '<div class="rep-shots"><h2>原始文件快照（含差异标注）</h2>' +
       '<div class="rep-shotmode"><button type="button" data-shotmode="width" class="on" title="页面铺满所在列宽（消除两侧空白）">适应宽度</button>' +
       '<button type="button" data-shotmode="actual" title="按原始像素大小显示">原始大小</button></div>' +

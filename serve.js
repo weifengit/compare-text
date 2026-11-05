@@ -11,6 +11,12 @@
  *   GET /api/file?path=<绝对路径>   → 文件字节流
  *   GET  /api/ocr-cache?path=<绝对路径>   → OCR 结果缓存查询（{ ok, hit, text?, items? }）
  *   POST /api/ocr-cache             → 写 OCR 结果缓存（body={ path, text, items }）
+ *   GET /api/fetch?url=<http(s) 地址>[&nocache=1] → 网页原始字节（X-Fetch-Url / X-Fetch-Cache / X-Fetch-Bytes）
+ *       出站统一 UA / 20s 超时 / 8MB 上限 / 逐跳重定向校验；只拒 http(s) 与内网地址
+ *       （测试要仍本地服务需 ALLOW_PRIVATE_FETCH=1）。
+ *       网页缓存键 = sha1(url)，默认 24h TTL（WEB_FETCH_TTL 秒可改），目录 ~/.compare-text/web-cache
+ *       （DSH_WEB_CACHE 可覆盖）——命中零出站，对比报告以离线重现。
+
  * OCR 缓存键 = sha1(path+size+mtime)，文件变化自动失效；缓存目录默认 ~/.compare-text/ocr-cache
  * （可用环境变量 DSH_OCR_CACHE 覆盖），供扫描版 PDF 识别结果跨运行复用、避免重复 OCR。
  *
@@ -19,6 +25,7 @@
  */
 'use strict';
 var http = require('http');
+var https = require('https');
 var fs = require('fs');
 var path = require('path');
 var os = require('os');
@@ -203,6 +210,142 @@ function ocrCacheWrite(absPath, st, text, items) {
   });
 }
 
+// ---------- 网页抓取代理（URL 直连对比） ----------
+// 为什么不在浏览器里直接 fetch 目标站点：
+//   ① 政务站点不给 CORS 头，浏览器直连必被拦；
+//   ② 原文要能落盘缓存，离线复跑不再依赖站点可用性（对比报告可重现）；
+//   ③ 出站要能统一 UA / 超时 / 体积上限，并逐跳校验重定向（避免被重定向到内网）。
+// 返回**原始字节** + Content-Type：字符集交给前端 TextDecoder（浏览器连 gbk 都能解），
+// 服务端不引入解码依赖，也不会把非 utf-8 页面提前解坏。
+var FETCH_TIMEOUT_MS = 20000;
+var FETCH_MAX_BYTES = 8 * 1024 * 1024;
+var FETCH_MAX_REDIRECTS = 5;
+var FETCH_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+function fetchTtlMs() {
+  var t = parseInt(process.env.WEB_FETCH_TTL || '', 10);
+  return (t > 0 ? t : 24 * 3600) * 1000;   // 默认 24h
+}
+
+var webCacheDirResolved = null;
+function webCacheDir() {
+  if (webCacheDirResolved) return webCacheDirResolved;
+  var cands = [];
+  if (process.env.DSH_WEB_CACHE) cands.push(process.env.DSH_WEB_CACHE);
+  cands.push(path.join(os.homedir(), '.compare-text', 'web-cache'));
+  cands.push(path.join(os.tmpdir(), 'compare-text-web-cache'));
+  for (var i = 0; i < cands.length; i++) {
+    try { fs.mkdirSync(cands[i], { recursive: true }); } catch (e) { continue; }
+    webCacheDirResolved = cands[i];
+    return webCacheDirResolved;
+  }
+  webCacheDirResolved = path.join(os.tmpdir(), 'compare-text-web-cache');
+  return webCacheDirResolved;
+}
+
+function webCacheFiles(url) {
+  var key = crypto.createHash('sha1').update(url).digest('hex');
+  var dir = webCacheDir();
+  return { meta: path.join(dir, key + '.json'), bin: path.join(dir, key + '.bin') };
+}
+
+/** 读网页缓存：未命中 / 过期 / 文件不全 → null */
+function webCacheRead(url) {
+  var files = webCacheFiles(url);
+  var meta = null;
+  try { meta = JSON.parse(fs.readFileSync(files.meta, 'utf8')); } catch (e) { return null; }
+  if (!meta || typeof meta.url !== 'string' || !(meta.bytes > 0)) return null;
+  if (Date.now() - (meta.fetchedAt || 0) > fetchTtlMs()) return null;
+  var bin;
+  try { bin = fs.readFileSync(files.bin); } catch (e) { return null; }
+  if (!bin || !bin.length) return null;
+  return { body: bin, contentType: meta.contentType || '', finalUrl: meta.finalUrl || meta.url, cachedAt: meta.fetchedAt };
+}
+
+function webCacheWrite(url, finalUrl, contentType, body) {
+  var files = webCacheFiles(url);
+  try {
+    fs.writeFileSync(files.bin, body);
+    var tmp = files.meta + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ url: url, finalUrl: finalUrl, contentType: contentType,
+      bytes: body.length, fetchedAt: Date.now() }));
+    fs.renameSync(tmp, files.meta);
+  } catch (e) { /* 缓存写不进去不影响本次抓取 */ }
+}
+
+/** 内网/回环判定：默认拒掉，防止把本地服务当成目标站点（ALLOW_PRIVATE_FETCH=1 放开，测试用） */
+function isPrivateAddress(ip) {
+  var v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip);
+  if (v4) {
+    var a = +v4[1], b = +v4[2];
+    if (a === 127 || a === 10 || a === 0) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+  var low = String(ip).toLowerCase();
+  if (low === '::1' || low === '::') return true;
+  if (/^f[cd]/.test(low) || /^fe80/.test(low)) return true;
+  if (/^::ffff:/.test(low)) return isPrivateAddress(low.slice(7));
+  return false;
+}
+
+function guardAddress(host, cb) {
+  if (process.env.ALLOW_PRIVATE_FETCH === '1') return cb(null);
+  if (/^[\d.]+$/.test(host)) return cb(isPrivateAddress(host) ? new Error('拒访内网地址 ' + host) : null);
+  require('dns').lookup(host, { all: false }, function (err, ip) {
+    if (err) return cb(new Error('域名解析失败：' + err.message));
+    cb(isPrivateAddress(ip) ? new Error('拒访内网地址 ' + host + '（' + ip + '）') : null);
+  });
+}
+
+/** 逐跳 GET：重定向自己跟，每一跳重新校验协议与地址（防止 302 到 127.0.0.1） */
+function remoteGet(urlStr, redirectsLeft, cb) {
+  var target;
+  try { target = new URL(urlStr); } catch (e) { return cb(new Error('URL 非法')); }
+  if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+    return cb(new Error('只支持 http/https，当前为 ' + target.protocol));
+  }
+  var mod = target.protocol === 'https:' ? https : http;
+  guardAddress(target.hostname, function (err) {
+    if (err) return cb(err);
+    var req = mod.get(target, {
+      headers: { 'User-Agent': FETCH_UA, 'Accept': 'text/html,application/xhtml+xml,*/*' },
+      timeout: FETCH_TIMEOUT_MS
+    }, function (res) {
+      var loc = res.headers.location;
+      if (res.statusCode >= 300 && res.statusCode < 400 && loc) {
+        res.resume();
+        if (redirectsLeft <= 0) return cb(new Error('重定向次数超过上限'));
+        return remoteGet(new URL(loc, target).href, redirectsLeft - 1, cb);
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        return cb(new Error('HTTP ' + res.statusCode));
+      }
+      var chunks = [], total = 0, over = false;
+      res.on('data', function (c) {
+        if (over) return;
+        total += c.length;
+        if (total > FETCH_MAX_BYTES) {
+          over = true; res.destroy();
+          cb(new Error('正文超过体积上限 ' + Math.round(FETCH_MAX_BYTES / 1024 / 1024) + 'MB'));
+          return;
+        }
+        chunks.push(c);
+      });
+      res.on('end', function () {
+        if (!over) cb(null, { body: Buffer.concat(chunks), contentType: res.headers['content-type'] || '', finalUrl: target.href });
+      });
+      res.on('error', function (e) { if (!over) cb(e); });
+    });
+    req.on('timeout', function () { req.destroy(new Error('抓取超时 ' + FETCH_TIMEOUT_MS + 'ms')); });
+    req.on('error', function (e) { cb(e); });
+  });
+}
+
+
 /** 处理 /api/* 请求（导出便于 test/api-test.js 直接调用） */
 function handleApi(req, res) {
   var u = new URL(req.url, 'http://localhost');
@@ -244,6 +387,44 @@ function handleApi(req, res) {
       var ext = path.extname(fp).toLowerCase();
       res.writeHead(200, { 'Content-Type': API_MIME[ext] || 'application/octet-stream', 'Content-Length': st.size });
       fs.createReadStream(fp).on('error', function () { res.end(); }).pipe(res);
+    });
+    return;
+  }
+  // 网页抓取代理：GET /api/fetch?url=<编码后的 http(s) 地址>[&nocache=1]
+  //   → 200 原始字节 + Content-Type，附 X-Fetch-Url（最终地址）/ X-Fetch-Cache（hit|miss）/ X-Fetch-Bytes
+  //   失败统一 502 JSON；缓存命中不产生任何出站请求。
+  if (u.pathname === '/api/fetch') {
+    var raw = q.get('url');
+    if (!raw) return sendJson(res, 400, { ok: false, error: '缺少 url 参数' });
+    var absUrl;
+    try { absUrl = new URL(raw).href; } catch (e0) { return sendJson(res, 400, { ok: false, error: 'URL 非法' }); }
+    // 协议在门口就拦住：这是调用方递错了参数（400），不是上游出了问题（502）
+    if (!/^https?:/i.test(absUrl)) return sendJson(res, 400, { ok: false, error: '只支持 http/https 地址' });
+    if (q.get('nocache') !== '1') {
+      var hit = webCacheRead(absUrl);
+      if (hit) {
+        res.writeHead(200, {
+          'Content-Type': hit.contentType || 'text/html; charset=utf-8',
+          'Content-Length': hit.body.length,
+          'X-Fetch-Url': encodeURIComponent(hit.finalUrl),
+          'X-Fetch-Cache': 'hit',
+          'X-Fetch-Bytes': String(hit.body.length)
+        });
+        res.end(hit.body);
+        return;
+      }
+    }
+    remoteGet(absUrl, FETCH_MAX_REDIRECTS, function (err, r) {
+      if (err) return sendJson(res, 502, { ok: false, error: String((err && err.message) || err), url: absUrl });
+      webCacheWrite(absUrl, r.finalUrl, r.contentType, r.body);
+      res.writeHead(200, {
+        'Content-Type': r.contentType || 'text/html; charset=utf-8',
+        'Content-Length': r.body.length,
+        'X-Fetch-Url': encodeURIComponent(r.finalUrl),
+        'X-Fetch-Cache': 'miss',
+        'X-Fetch-Bytes': String(r.body.length)
+      });
+      res.end(r.body);
     });
     return;
   }
@@ -331,4 +512,6 @@ if (require.main === module) {
 }
 
 module.exports = { handleApi: handleApi, start: start, MIME: MIME, API_MIME: API_MIME,
-  ocrCacheDir: ocrCacheDir, ocrCacheKey: ocrCacheKey, ocrCacheRead: ocrCacheRead, ocrCacheWrite: ocrCacheWrite };
+  ocrCacheDir: ocrCacheDir, ocrCacheKey: ocrCacheKey, ocrCacheRead: ocrCacheRead, ocrCacheWrite: ocrCacheWrite,
+  webCacheDir: webCacheDir, webCacheRead: webCacheRead, webCacheWrite: webCacheWrite,
+  isPrivateAddress: isPrivateAddress, remoteGet: remoteGet, fetchTtlMs: fetchTtlMs };

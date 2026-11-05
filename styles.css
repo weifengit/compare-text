@@ -1080,3 +1080,79 @@ html, body {
 .xc-more, .xc-more-rows { color: var(--line-num); font-size: 11px; }
 .xc-more-rows { padding: 4px 6px; }
 .xc-empty { color: var(--line-num); font-size: 11.5px; font-style: italic; }
+
+/* ============================================================= 网页源与样式核对 */
+/* 主区域3 的第三种正文：同源 iframe。面板成为唯一滚动容器（iframe 撑到内容全高），
+   于是协同滚动与报告逐页快照与 PDF/docx 走同一条路，不必为网页特判。 */
+.pdf-panel .web-frame {
+  display: block;
+  width: 100%;
+  /* 缩放由 WebView.fitWidth 负责：iframe 保持面板宽，内部按版心宽 zoom 缩放。
+     iframe 元素本身不能定成 1200px——那会让面板直接裁掉右侧，zoom 只作用于文档内部 */
+  min-height: 240px;
+  border: 0;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .3);
+  margin: 0 auto;
+}
+
+/* 样式核对面板：只在「一侧网页 + 一侧文档」时出现，差异按段落号可点跳 */
+.stylepanel {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  margin: 0 0 8px;
+  overflow: hidden;
+}
+.stylepanel[hidden] { display: none; }
+.sp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: #f7f9fb;
+  flex-wrap: wrap;
+}
+.sp-head strong { font-size: 13px; color: #1f2d3d; }
+.sp-basis { font-size: 12px; color: #555; display: inline-flex; align-items: center; gap: 4px; }
+.sp-basis select { font-size: 12px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; }
+.sp-spacer { flex: 1 1 auto; }
+.sp-stats { font-size: 12px; color: #445; }
+.sp-stats .sp-ok { color: #1c7d43; font-weight: 600; }
+.sp-stats .sp-bad { color: #c0392b; font-weight: 600; }
+.sp-body { max-height: 260px; overflow: auto; }
+.sp-body.collapsed { display: none; }
+.sp-empty { padding: 12px 14px; font-size: 12px; color: #667; }
+table.sp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.sp-table th, table.sp-table td {
+  padding: 4px 8px; border-bottom: 1px solid #eef1f4; text-align: left; vertical-align: top;
+}
+table.sp-table th { background: #fafbfc; position: sticky; top: 0; z-index: 1; }
+table.sp-table tr.sp-row { cursor: pointer; }
+table.sp-table tr.sp-row:hover { background: #f2f7ff; }
+table.sp-table td.sp-para { width: 52px; color: #8892a0; font-family: var(--mono); }
+table.sp-table td.sp-prop { width: 96px; }
+table.sp-table td.sp-val { width: 108px; font-family: var(--mono); }
+table.sp-table td.sp-val.sp-actual { color: #c0392b; }
+table.sp-table td.sp-text { color: #445; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-spec { padding: 8px 10px; border-bottom: 1px solid var(--border); background: #fcfcfd; }
+.sp-spec[hidden] { display: none; }
+.sp-spec-hint { font-size: 12px; color: #556; margin-bottom: 6px; }
+.sp-spec textarea {
+  width: 100%; min-height: 96px; box-sizing: border-box; font-family: var(--mono); font-size: 12px;
+  border: 1px solid var(--border); border-radius: 4px; padding: 6px;
+}
+.sp-spec-row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.sp-spec-row input[type=text] { flex: 1 1 auto; font-size: 12px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; }
+.sp-spec-err { font-size: 12px; color: #c0392b; }
+
+/* 网页加载弹层 */
+.web-dialog { width: min(620px, 92vw); }
+.web-form { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.web-row { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #445; }
+.web-row input[type=text], .web-row select {
+  font-size: 13px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px;
+}
+.web-row.web-check { flex-direction: row; align-items: center; gap: 6px; }
+.web-hint { font-size: 12px; color: #667; line-height: 1.6; }

@@ -34,6 +34,13 @@ node serve.js build             # 重建 Tauri 打包用的 dist/（一般由打
   - 主区域三方原表对照（虚拟滚动，按源文件列宽/隐藏列渲染，差异单元格涂色，可一键跳到对应行）
   - 导出**带源文件格式还原的 Excel 报告**（列宽/表头样式/行高/冻结窗格全部保留），表头以上的标题栏/分组行也一并保留
   - 读取前自动清洗 WPS/Excel 写坏的 `_FilterDatabase` 定义名（否则 2000 行的小表也会吃 3GB 内存）
+- **网页对比（URL 直连 / 本地 HTML 快照）**：把网页渲染结果和本地 docx 放同一界面肉眼比对，验证文档还原是否走样
+  - 正文容器自动识别（政务 CMS 的 `#content_zw` 等），站点外壳/脚本不进沙箱；同源 srcdoc 渲染，祖先链保留使站点 CSS 照常命中
+  - **原稿样式核对**：从页面内嵌样式声明（含 Word 粘贴产生的残缺声明 `:10pt`、`l=:150%`）提取样式向量，与 docx 的 OOXML 声明逐段比对；只比基准声明了的属性，差异为命名段落 + 命名属性
+  - **期望样式表**（`specs/*.json`）可接管基准：defaults + 顺序规则（按段首文本/包含文本/段落类型匹配），未提及的属性不参与判定
+  - 外链 CSS 默认内联（逐个抓取、逐条失败记账，失败的 URL 写进面板提示）；离线或手动关闭时退回 `<base>` + 浏览器默认样式
+  - 网页快照与样式结论一同写进自包含 HTML 报告；无头渲染走 `tools/render.js --task demo-web.json`
+  - 经 `/api/fetch` 代理取网页：字节透传 + 服务端 24h 磁盘缓存（`~/.compare-text/web-cache`），默认拒访内网地址（`ALLOW_PRIVATE_FETCH=1` 放开）
 - **忽略选项（默认全选中）**：
   - 忽略大小写
   - 忽略 CRLF/LF 行结束符
@@ -79,6 +86,8 @@ src/xlsx-report.js      Excel 报告生成（格式还原：列宽/样式/行高
 src/xlsxflow.js         Excel 对比编排（读一个丢一个，峰值内存减半）
 src/xlsxview.js         结果区三视图（全部 / 新增 / 修改 / 删除）
 src/sheetview.js        主区域3 的表格查看器（虚拟滚动、差异涂色）
+src/webstyle.js         原稿/期望样式向量提取与比对（纯文本，浏览器/Node 共用）
+src/webview.js          网页渲染查看器（srcdoc 沙箱、外链 CSS 内联、行锚定）
 src/xlsxconfig.js       多 Sheet 配置弹窗（表头行范围 + 键列 + 预览）
 test/                   Node 测试
 src-tauri/              Tauri 桌面壳（Rust 命令在 src-tauri/src/lib.rs）
@@ -90,12 +99,16 @@ src-tauri/              Tauri 桌面壳（Rust 命令在 src-tauri/src/lib.rs）
 npm test             # 核心：算法 + Worker 桥接 + 界面初始化/渲染（DOM 桩）
 npm run test:all     # 扩展：再加 API / 协同滚动 / PDF 多页切换
 npm run test:ui      # 单独跑界面初始化/渲染（DOM 桩）
+npm run test:webstyle  # 单独跑样式向量提取与比对（纯文本，无浏览器）
+npm run test:fetch    # 单独跑 /api/fetch 代理（缓存/重定向/GBK 透传/内网拦截）
+npm run test:e2e:webview  # 浏览器端到端：网页渲染 + docx 样式核对差异为 0（需本机 Edge）
 npm run test:pdf     # 单独跑 PDF 多页切换
 npm run test:xlsx    # 单独跑 Excel 对比（读取/清洗/比对/报告生成/三视图）
 ```
 
 测试均在 Node 内跑（DOM 桩 / 直接调用导出），无需浏览器或服务器。
-个别浏览器端到端用例（`test/e2e-*.js`）需要本机 Edge，未纳入以上默认命令。
+浏览器端到端用例（`test/e2e-*.js`）需要本机 Edge；其中 `e2e-webview` 已纳入 `test:all`，其余仍在默认命令之外。
+截图拼接体检（接缝重复/空白/右侧裁边）用 `node tools/analyze-seams.js demo/shot-web.png --control demo/shot-col1.png`，零依赖（PNG 解码内置）。
 
 ## 集成到 DeepSeek Harness（DSH）
 

@@ -537,13 +537,25 @@ function rawOptions(M) {
   return o;
 }
 /** 页面内驱动：加载两侧 → 比较 → 取结果 → 逐页快照。返回 {leftName,rightName,result,shots} */
+/** 网页引用：http(s) 直连，或本地 HTML 快照（站点原文落盘后离线复现） */
+function isWebRef(ref) {
+  return /^(https?:)?\/\//i.test(String(ref || '')) || /\.html?$/i.test(String(ref || ''));
+}
+function refLabel(ref) {
+  var s = String(ref || '');
+  return s.replace(/^https?:\/\//, '').split('/').filter(Boolean).pop() || s;
+}
+
 async function renderPair(pair, opts, idx, warnings) {
-  var left = path.resolve(pair.left), right = path.resolve(pair.right);
-  if (!fs.existsSync(left)) throw new Error('左侧文件不存在：' + left);
-  if (!fs.existsSync(right)) throw new Error('右侧文件不存在：' + right);
-  var kindL = /\.docx$/i.test(left) ? 'docx' : /\.pdf$/i.test(left) ? 'pdf' : 'none';
-  var kindR = /\.docx$/i.test(right) ? 'docx' : /\.pdf$/i.test(right) ? 'pdf' : 'none';
-  log('  [对 ' + (idx + 1) + '] ' + path.basename(left) + ' ↔ ' + path.basename(right) + '（L=' + kindL + ' R=' + kindR + '）');
+  // 网页侧不做 fs.existsSync：URL 的存在性由 /api/fetch 的响应码说话，
+  // 本地快照的存在性在下面按路径分支检查。
+  var left = isWebRef(pair.left) ? String(pair.left) : path.resolve(pair.left);
+  var right = isWebRef(pair.right) ? String(pair.right) : path.resolve(pair.right);
+  if (!isWebRef(pair.left) && !fs.existsSync(left)) throw new Error('左侧文件不存在：' + left);
+  if (!isWebRef(pair.right) && !fs.existsSync(right)) throw new Error('右侧文件不存在：' + right);
+  var kindL = isWebRef(left) ? 'web' : (/\.docx$/i.test(left) ? 'docx' : /\.pdf$/i.test(left) ? 'pdf' : 'none');
+  var kindR = isWebRef(right) ? 'web' : (/\.docx$/i.test(right) ? 'docx' : /\.pdf$/i.test(right) ? 'pdf' : 'none');
+  log('  [对 ' + (idx + 1) + '] ' + refLabel(left) + ' ↔ ' + refLabel(right) + '（L=' + kindL + ' R=' + kindR + '）');
 
   // 选项先设好（页面自动对比会按当前选项跑），再加载。缺省与页面默认一致（全开）
   var M = { optIgnoreCase: 1, optIgnoreEol: 1, optIgnoreWhitespace: 1, optIgnoreNewline: 1, optIgnoreWidth: 1, optIgnorePunct: 1 };
@@ -558,9 +570,19 @@ async function renderPair(pair, opts, idx, warnings) {
   await evaluate('(function(){var M=' + JSON.stringify(M) + ';for(var id in M)' +
     'document.getElementById(id).checked=!!M[id];return 1;})()');
   // 扫描版 PDF 自动识别：无头模式不弹确认框，检测到无文字层即自动跑 OCR（见 pipeline.js）
-  await evaluate('window.__HEADLESS_OCR__ = true; 1');
-  await evaluate('Pipeline.loadSide("L", ' + JSON.stringify(left.replace(/\\/g, '/')) + ')');
-  await evaluate('Pipeline.loadSide("R", ' + JSON.stringify(right.replace(/\\/g, '/')) + ')');
+  await evaluate('window.__HEADLESS_OCR__ = true; window.__HEADLESS_REPORT__ = true; 1');
+  // 网页侧参数：containerId 留空由 Pipeline 自动识别（content_zw / vsb_content …）；
+  // inlineAssets 关掉时外链 CSS 不抓，渲染退回浏览器默认样式——快，但版式对照失真。
+  var webL = pair.leftOpts || {}, webR = pair.rightOpts || {};
+  function loadExpr(side, ref, kind, wopts) {
+    var o = (kind === 'web') ? JSON.stringify({
+      containerId: wopts.containerId || undefined,
+      inlineAssets: wopts.inlineAssets !== false
+    }) : 'undefined';
+    return 'Pipeline.loadSide(' + JSON.stringify(side) + ', ' + JSON.stringify(String(ref).replace(/\\/g, '/')) + ', ' + o + ')';
+  }
+  await evaluate(loadExpr('L', left, kindL, webL) + '; 1');
+  await evaluate(loadExpr('R', right, kindR, webR) + '; 1');
 
   // 等两侧渲染完成：PDF 等画布、docx 等 renderAsync + 文本提取
   function loadedExpr(side, kind) {
@@ -573,6 +595,11 @@ async function renderPair(pair, opts, idx, warnings) {
     if (kind === 'docx') {
       return 'JSON.stringify({ok:(function(){var d=typeof DocxView!=="undefined"?DocxView._debug("' + side + '"):null;' +
         'return !!(d&&d.loaded&&d.hasText);})()})';
+    }
+    if (kind === 'web') {
+      // 网页侧就绪 = iframe 已渲染 + 段落已对齐 + 高度已撑开（高度没量准就截图会只截到首屏）
+      return 'JSON.stringify({ok:(function(){var d=(typeof WebView!=="undefined"&&WebView._debug)?WebView._debug("' + side + '"):null;' +
+        'return !!(d&&d.loaded&&d.hasText&&d.aligned>0&&parseInt(d.frameHeight,10)>600);})()})';
     }
     // 纯文本：无面板，等编辑区写入文本即可（.CodeMirror 按 DOM 顺序 = L、R）
     return 'JSON.stringify({ok:(function(){var eds=document.querySelectorAll(".CodeMirror");' +
@@ -662,20 +689,89 @@ async function renderPair(pair, opts, idx, warnings) {
 
   // 逐侧快照（面板里真正渲染的是什么就按什么截；PDF 优先直接光栅化，绕开合成器截图）
   var kinds = await evalJson('(function(){function k(id){var p=document.getElementById(id);' +
-    'if(p&&p.querySelector(".docx-host"))return "docx";if(p&&p.querySelectorAll(".pdf-page").length)return "pdf";return "none";}' +
+    'if(p&&p.querySelector(".docx-host"))return "docx";' +
+    'if(p&&p.querySelector("iframe.web-frame"))return "web";' +
+    'if(p&&p.querySelectorAll(".pdf-page").length)return "pdf";return "none";}' +
     'return JSON.stringify({L:k("pdfLeft"),R:k("pdfRight")});})()');
+  // 采集前把网页侧的 iframe 高度锁死：样式与字体是异步落地的，
+  // 不锁就会在逐片截图中间改一次几何，拼出来的整页出现缩放不一致的接缝。
+  if (kinds.L === 'web' || kinds.R === 'web') {
+    // 先等内容真的稳定再冻结：外链 CSS 与字体是异步生效的，生效一次整页重排一次。
+    // 顺序反了会把"重排前后"两段几何截进同一张拼图（实测：上半密排、下半疏排，中间一条接缝）。
+    // 判定要求高度 > 0——两侧都还没 iframe 时都是 0，"两次相等"会假通过。
+    // 稳定性要量**iframe 里的内容高度**，不是 iframe 元素自身的高度：
+    // 元素高度是我们按内容写死的，站点 CSS 生效时 WebView 的自动补量已经停了，
+    // 元素高度不变、内容却重排了——照元素高度判定会假通过，
+    // 于是切片截到"重排前 + 重排后"两段几何，拼出一张内容重复的图（实测踩过）。
+    var settle = '(function(){function h(id){var p=document.getElementById(id);' +
+      'if(!p)return null;var f=p.querySelector("iframe.web-frame");' +
+      'if(!f||!f.contentDocument)return null;' +
+      'var pg=f.contentDocument.querySelector(".web-page");' +
+      'return pg?Math.round(pg.getBoundingClientRect().height):null;}' +
+      'var cur={L:h("pdfLeft"),R:h("pdfRight")};' +
+      'var live=[cur.L,cur.R].filter(function(v){return v!==null&&v>0;});' +
+      'if(!live.length){window.__webH=null;return "0";}' +
+      'var prev=window.__webH;window.__webH=cur;' +
+      'if(!prev)return "0";' +
+      'var ok=true;' +
+      'if(cur.L!==null)ok=ok&&(prev.L===cur.L);' +
+      'if(cur.R!==null)ok=ok&&(prev.R===cur.R);' +
+      'return ok?"1":"0";})()';
+    try {
+      await poll(settle, function (v) { return v === '1'; }, 40, '网页侧内容高度稳定');
+    } catch (e) {
+      // 内容迟迟不稳不能毁掉整份报告：记 warning，快照仍按最后一次几何采集
+      var note = '第 ' + (idx + 1) + ' 对网页侧版面未收敛（' + e.message.slice(0, 120) + '），快照可能有接缝';
+      log('  !! ' + note); warnings.push(note);
+    }
+    // 先按当前（最终）面板宽重算 zoom 与高度，再冻结：
+    // 面板从 hidden 转为可见时宽度才真正确定，早先算出的 zoom 是退化值（见 webview.js 注释）
+    await evaluate('(function(){if(typeof WebView!=="undefined"&&WebView.fitWidth){' +
+      'if(WebView.isLoaded("L"))WebView.fitWidth("L");if(WebView.isLoaded("R"))WebView.fitWidth("R");}' +
+      'return 1;})()');
+    await wait(240);
+    await evaluate('(function(){if(typeof WebView!=="undefined"&&WebView.freeze){' +
+      'WebView.syncHeight("L");WebView.syncHeight("R");WebView.freeze();}return 1;})()');
+    await wait(200);
+  }
+
   var shots = { L: [], R: [] };
   if (kinds.L === 'docx') shots.L = await snapSide('L', 'pdfLeft', '.docx-wrapper section.docx', 'L(docx)', false);
   else if (kinds.L === 'pdf') shots.L = await snapSide('L', 'pdfLeft', '.pdf-page', 'L(pdf)', true);
+  // 网页侧快照对象是 iframe 元素本身：.web-page 在 iframe 文档里，面板 DOM 取不到它。
+  // iframe 已被撑到内容全高（见 webview.syncFrameHeight），所以与 docx 页块同一套
+  // 「按可视高切片再拼接」的采集逻辑，不需要为网页另开一条通道。
+  else if (kinds.L === 'web') shots.L = await snapSide('L', 'pdfLeft', 'iframe.web-frame', 'L(web)', false);
   if (kinds.R === 'docx') shots.R = await snapSide('R', 'pdfRight', '.docx-wrapper section.docx', 'R(docx)', false);
   else if (kinds.R === 'pdf') shots.R = await snapSide('R', 'pdfRight', '.pdf-page', 'R(pdf)', true);
+  else if (kinds.R === 'web') shots.R = await snapSide('R', 'pdfRight', 'iframe.web-frame', 'R(web)', false);
+
+  // 样式核对：只有「一侧网页 + 一侧文档」才谈得上还原，其它组合静默跳过（不是失败）。
+  var style = null;
+  if ((kinds.L === 'web' && kinds.R !== 'web') || (kinds.R === 'web' && kinds.L !== 'web')) {
+    try {
+      style = await evalJson('(function(){if(!Pipeline.styleCheck) return "null";' +
+        'return Pipeline.styleCheck().then(function(r){' +
+        'if(!r||!r.ok) return JSON.stringify({error:(r&&r.error)||"核对失败"});' +
+        'return JSON.stringify({basis:r.basisName,summary:r.summary,containerId:r.containerId,' +
+        'webSide:r.webSide,diffs:(r.diffs||[]).slice(0,400),truncated:(r.diffs||[]).length>400});});})()');
+      if (style && style.summary) {
+        log('  样式核对（基准：' + style.basis + '）：' + style.summary.total + ' 处差异，对齐 ' +
+          style.summary.aligned + ' 段' + (style.summary.byProp ? '，' + style.summary.byProp : ''));
+      } else if (style && style.error) {
+        warnings.push('第 ' + (idx + 1) + ' 对样式核对未完成：' + style.error);
+      }
+    } catch (e) {
+      warnings.push('第 ' + (idx + 1) + ' 对样式核对异常：' + e.message);
+    }
+  }
 
   // 修整前原文（供报告"取消修整"按钮切换显示；无则 null）
   var rawText = await evalJson('JSON.stringify(window.__reportRawText__||null)');
   // 原始文本的 grid diff（保留换行，带颜色标注+行号）；Compute 不可用时为 null
   var rawDiff = await evalJson('JSON.stringify(window.__reportRawDiff__||null)');
-  return { leftName: path.basename(left), rightName: path.basename(right), result: result, shots: shots,
-    rawText: rawText, rawResult: rawDiff };
+  return { leftName: refLabel(left), rightName: refLabel(right), result: result, shots: shots,
+    rawText: rawText, rawResult: rawDiff, style: style, kinds: kinds };
 }
 
 function addStats(stats, result) {

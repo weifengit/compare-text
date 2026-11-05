@@ -192,6 +192,7 @@
       if (!isRestore) saveHistoryEntry();
       renderHistory();
       if (!isRestore) updateTabTitle();
+      maybeStyleCheck();
     },
     // 结果区 DOM 重建后：重新绑定协同滚动（左右栏/流水栏都是新元素）
     onRendered: function () { rebindScrollSync(); },
@@ -200,8 +201,10 @@
       if (FilterBar.setFields) FilterBar.setFields(PdfView.segmentFields ? PdfView.segmentFields(text) : []);
       if (side === 'L') editorL.setValue(text); else editorR.setValue(text);
     },
-    // 主区域3（PDF/Word 面板）显隐随面板加载结果重算
+    // 主区域3（PDF/Word/网页 面板）显隐随面板加载结果重算
     onPanelsChanged: updatePdfArea,
+    // 样式核对结果：渲染「样式核对」面板（差异按段落可点跳）
+    onStyleResult: function (result) { renderStyleResult(result); },
     // 两侧皆空：状态栏回到初始文案
     onPlaceholder: function () { statusEl.textContent = '在两侧粘贴文本即可自动对比'; },
     // 扫描版 PDF（无文字层）检测到：弹出确认框，用户决定是否 OCR
@@ -406,6 +409,7 @@
     if (FilterBar.selectFile) { FilterBar.selectFile('L', pR, true); FilterBar.selectFile('R', pL, true); }
     if (PdfView.swap) PdfView.swap();
     if (DocxView.swap) DocxView.swap();
+    if (typeof WebView !== 'undefined' && WebView.swap) WebView.swap();
     Pipeline.resetCharMaps();                 // PDF 互换：作废旧字符表，待重算
     updateTabTitle();
     toast('已左右互换');
@@ -429,6 +433,8 @@
     setTidyBtnMode(false);
     if (PdfView.clear) PdfView.clear();
     if (DocxView.clear) DocxView.clear();
+    if (typeof WebView !== 'undefined' && WebView.clear) WebView.clear();
+    hideStylePanel();
     updatePdfArea();                             // 清除后无 PDF → 隐藏主区域3
     Pipeline.resetCharMaps();
     if (FilterBar.setFields) FilterBar.setFields([]);
@@ -818,7 +824,9 @@
     var hasPdf = !!(PdfView.isLoaded && (PdfView.isLoaded('L') || PdfView.isLoaded('R')))
       || !!(DocxView.isLoaded && (DocxView.isLoaded('L') || DocxView.isLoaded('R')))
       || !!(typeof SheetView !== 'undefined' && SheetView.isLoaded
-            && (SheetView.isLoaded('L') || SheetView.isLoaded('R')));
+            && (SheetView.isLoaded('L') || SheetView.isLoaded('R')))
+      || !!(typeof WebView !== 'undefined' && WebView.isLoaded
+            && (WebView.isLoaded('L') || WebView.isLoaded('R')));
     pdfareaEl.classList.toggle('hidden', !hasPdf);
   }
   function refitPageToPdf() {
@@ -948,8 +956,194 @@
       onDirChange: onDirChange
     });
   }
+  // ---------- 网页源入口（URL 直连 / 本地 HTML 快照） ----------
+  var webBtn = $('webBtn'), webMask = $('webMask'), webUrl = $('webUrl'), webSideSel = $('webSide'),
+    webContainerInput = $('webContainer'), webInline = $('webInline'), webErr = $('webErr'),
+    webOkBtn = $('webOkBtn'), webCancelBtn = $('webCancelBtn'), webCloseBtn = $('webCloseBtn');
+
+  function showWebErr(message) {
+    if (!webErr) return;
+    webErr.textContent = message;
+    webErr.classList.remove('hidden');
+  }
+  function openWebDialog() {
+    if (!webMask) return;
+    webMask.hidden = false;
+    webErr.classList.add('hidden');
+    setTimeout(function () { try { webUrl.focus(); webUrl.select(); } catch (e) {} }, 30);
+  }
+  function closeWebDialog() { if (webMask) webMask.hidden = true; }
+
+  /**
+   * 地址校验放宽到「像 URL 或像 .html 路径」：
+   * 局域网部署时用户会直接粘 http://内网IP/…，硬拦 https 反而挡了正当用法。
+   * 真正的出站安全（协议白名单 + 内网拦截）在 serve.js /api/fetch 那一层做。
+   */
+  function loadFromWebDialog() {
+    var ref = String(webUrl.value || '').trim();
+    if (!ref) { showWebErr('请输入 URL 或本地 HTML 快照路径'); return; }
+    if (!/^(https?:)?\/\//i.test(ref) && !/\.html?$/i.test(ref)) {
+      showWebErr('既不是 http(s) 地址，也不是 .html 文件路径');
+      return;
+    }
+    if (/^\/\//.test(ref)) ref = 'https:' + ref;            // //host/path 省略协议
+    var side = webSideSel.value === 'R' ? 'R' : 'L';
+    var opts = {
+      containerId: String(webContainerInput.value || '').trim() || undefined,
+      inlineAssets: !webInline || webInline.checked
+    };
+    closeWebDialog();
+    toast('正在加载网页…');
+    Pipeline.loadSide(side, ref, opts);
+  }
+
+  if (webBtn) webBtn.addEventListener('click', openWebDialog);
+  if (webOkBtn) webOkBtn.addEventListener('click', loadFromWebDialog);
+  if (webCancelBtn) webCancelBtn.addEventListener('click', closeWebDialog);
+  if (webCloseBtn) webCloseBtn.addEventListener('click', closeWebDialog);
+  if (webMask) webMask.addEventListener('click', function (ev) { if (ev.target === webMask) closeWebDialog(); });
+  if (webUrl) webUrl.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') loadFromWebDialog(); });
+
+  // ---------- 样式核对面板 ----------
+  var stylePanel = $('stylePanel'), styleBody = $('styleBody'), styleStats = $('styleStats'),
+    styleBasisSel = $('styleBasisSel'), styleSpecBtn = $('styleSpecBtn'), styleSpecBox = $('styleSpecBox'),
+    styleSpecText = $('styleSpecText'), styleSpecPath = $('styleSpecPath'), styleSpecLoadBtn = $('styleSpecLoadBtn'),
+    styleSpecApplyBtn = $('styleSpecApplyBtn'), styleSpecErr = $('styleSpecErr'),
+    styleRunBtn = $('styleRunBtn'), styleToggleBtn = $('styleToggleBtn');
+  var lastStyleResult = null;
+
+  function hideStylePanel() {
+    if (stylePanel) stylePanel.hidden = true;
+    lastStyleResult = null;
+  }
+
+  /** 只有「一侧网页 + 一侧文档」才谈得上"还原没还原"，其它组合不自动弹面板 */
+  function styleApplicable() {
+    if (typeof Pipeline.styleState !== 'function' || typeof Pipeline.docxVectorsOf !== 'function') return false;
+    var state = Pipeline.styleState();
+    var web = state.web.L || state.web.R;
+    var docx = state.kinds.L === 'docx' || state.kinds.R === 'docx';
+    return web && docx;
+  }
+
+  function maybeStyleCheck() { if (styleApplicable()) runStyleCheck(); }
+
+  function runStyleCheck() {
+    if (typeof Pipeline.styleCheck !== 'function') return;
+    Pipeline.styleCheck().then(function (result) {
+      renderStyleResult(result);
+      // 报告通道（render.js）里不弹 toast：它是浮在面板上的 DOM 层，
+      // 逐片截图会把它一起拍进"原始文件快照"里（实测出现过）。界面交互才提示。
+      if (window.__HEADLESS_REPORT__) return;
+      if (result && result.ok) {
+        var s = result.summary;
+        toast(s.total ? '样式核对：' + s.total + ' 处差异（基准：' + result.basisName + '）'
+                      : '样式核对：无版式差异（基准：' + result.basisName + '）', !!s.total);
+      } else if (result) {
+        toast('样式核对失败：' + result.error, true);
+      }
+    });
+  }
+
+  function renderStyleResult(result) {
+    lastStyleResult = result;
+    if (!stylePanel) return;
+    if (!result || !result.ok) {
+      stylePanel.hidden = false;
+      styleStats.innerHTML = '<span class="sp-bad">无法核对</span>';
+      styleBody.innerHTML = '<div class="sp-empty">' + escHtml(result ? result.error : '尚未开始') + '</div>';
+      return;
+    }
+    var s = result.summary;
+    stylePanel.hidden = false;
+    styleStats.innerHTML = (s.total
+        ? '<span class="sp-bad">差异 ' + s.total + ' 处</span>'
+        : '<span class="sp-ok">无版式差异</span>')
+      + ' ｜ 基准：' + escHtml(result.basisName)
+      + ' ｜ 对齐 ' + s.aligned + ' 段'
+      + (s.onlyActual ? ' ｜ 仅文档有 ' + s.onlyActual : '')
+      + (s.onlyExpected ? ' ｜ 仅原稿有 ' + s.onlyExpected : '')
+      + (s.byProp ? ' ｜ ' + escHtml(s.byProp) : '');
+    if (!s.total) {
+      styleBody.innerHTML = '<div class="sp-empty">按「' + escHtml(result.basisName)
+        + '」逐段核对：字号、字体、对齐、首行缩进、行距、上下标全部一致。</div>';
+      return;
+    }
+    styleBody.innerHTML = '<table class="sp-table"><thead><tr><th>段落</th><th>属性</th><th>期望</th>'
+      + '<th>实际</th><th>段落摘要</th></tr></thead><tbody>'
+      + result.diffs.map(function (d) {
+        return '<tr class="sp-row" data-text="' + escHtml(d.text) + '">'
+          + '<td class="sp-para">' + d.para + '</td>'
+          + '<td class="sp-prop">' + escHtml(d.prop) + '</td>'
+          + '<td class="sp-val">' + escHtml(d.expect) + '</td>'
+          + '<td class="sp-val sp-actual">' + escHtml(d.actual) + '</td>'
+          + '<td class="sp-text" title="' + escHtml(d.text) + '">' + escHtml(d.text) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  /** 点一行 → 网页面板滚到那一段（差异只有落到看得见的段落上才有意义） */
+  if (styleBody) styleBody.addEventListener('click', function (ev) {
+    var row = ev.target && ev.target.closest ? ev.target.closest('tr.sp-row') : null;
+    if (!row || !lastStyleResult || !lastStyleResult.ok) return;
+    var side = lastStyleResult.webSide;
+    if (typeof WebView === 'undefined' || !WebView.lineForText) return;
+    var line = WebView.lineForText(side, row.getAttribute('data-text') || '');
+    if (line == null) { toast('面板里没找到这一段', true); return; }
+    var top = WebView.lineOffset(side, line);
+    var panel = PdfView.getPanel ? PdfView.getPanel(side) : null;
+    if (top == null || !panel) { toast('该侧面板还没就绪，无法定位', true); return; }
+    panel.scrollTop = Math.max(0, top - 24);
+  });
+
+  if (styleRunBtn) styleRunBtn.addEventListener('click', runStyleCheck);
+  if (styleBasisSel) styleBasisSel.addEventListener('change', function () {
+    Pipeline.setStyleBasis(styleBasisSel.value);
+    if (styleBasisSel.value === 'spec' && styleSpecBox) styleSpecBox.hidden = false;
+    maybeStyleCheck();
+  });
+  if (styleSpecBtn) styleSpecBtn.addEventListener('click', function () {
+    if (!styleSpecBox) return;
+    styleSpecBox.hidden = !styleSpecBox.hidden;
+  });
+  if (styleToggleBtn) styleToggleBtn.addEventListener('click', function () {
+    if (!styleBody) return;
+    styleBody.classList.toggle('collapsed');
+    styleToggleBtn.textContent = styleBody.classList.contains('collapsed') ? '展开明细' : '收起明细';
+  });
+
+  /**
+   * 期望表应用：JSON 解析失败要写回面板，不要 toast 一闪而过——
+   * 用户需要看到是哪一行写错了（toast 3 秒就没了，textarea 还在）。
+   */
+  function applyStyleSpec() {
+    styleSpecErr.textContent = '';
+    var raw = String(styleSpecText.value || '').trim();
+    if (!raw) { Pipeline.setStyleBasis('source'); maybeStyleCheck(); return; }
+    var spec = null;
+    try { spec = JSON.parse(raw); } catch (e) {
+      styleSpecErr.textContent = 'JSON 解析失败：' + e.message;
+      return;
+    }
+    Pipeline.setStyleBasis('spec', spec, spec.name || '期望样式表');
+    maybeStyleCheck();
+  }
+
+  if (styleSpecApplyBtn) styleSpecApplyBtn.addEventListener('click', applyStyleSpec);
+  if (styleSpecLoadBtn) styleSpecLoadBtn.addEventListener('click', function () {
+    var abs = String(styleSpecPath.value || '').trim();
+    if (!abs) { styleSpecErr.textContent = '请填写 JSON 文件的绝对路径'; return; }
+    fetch('/api/file?path=' + encodeURIComponent(abs)).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.text();
+    }).then(function (text) {
+      styleSpecText.value = text;
+      applyStyleSpec();
+    }).catch(function (err) { styleSpecErr.textContent = '读取失败：' + err.message; });
+  });
+
   if (PdfView.init) PdfView.init({ left: $('pdfLeft'), right: $('pdfRight') });
   if (typeof DocxView !== 'undefined' && DocxView.init) DocxView.init({ left: $('pdfLeft'), right: $('pdfRight') });
+  if (typeof WebView !== 'undefined' && WebView.init) WebView.init({ left: $('pdfLeft'), right: $('pdfRight') });
   // 对比源路径输入框：点击弹出文件夹选择
   if (Picker && Picker.init) Picker.init({ input: srcPathInput, onPick: loadSrcPath });
 

@@ -1,0 +1,61 @@
+{
+  "name": "广东省中药材及饮片标准 2026 年版 · 原稿口径",
+  "source": "https://gdidc.gd.gov.cn/zwfw/dfbz/bz2025/",
+  "containerId": "content_zw",
+  "defaults": {
+    "family": "宋体",
+    "latin": "Times New Roman",
+    "sizePt": 10,
+    "lineSpacing": 1.5
+  },
+  "rules": [
+    {
+      "match": {
+        "align": "center"
+      },
+      "set": {
+        "indentIn": 0
+      }
+    },
+    {
+      "match": {
+        "textStarts": "【标准号】"
+      },
+      "set": {
+        "sizePt": 14,
+        "family": "等线",
+        "indentIn": 0
+      }
+    },
+    {
+      "match": {
+        "textStarts": "GDPG-",
+        "sizeLt": 13
+      },
+      "set": {
+        "sizePt": 14
+      }
+    },
+    {
+      "match": {
+        "textStarts": "GDYC-",
+        "sizeLt": 13
+      },
+      "set": {
+        "sizePt": 14
+      }
+    },
+    {
+      "match": {
+        "kind": "table"
+      },
+      "set": {
+        "sizePt": 9,
+        "lineSpacing": 1,
+        "indentIn": 0,
+        "align": "center"
+      }
+    }
+  ],
+  "notes": "口径来源：站点正文页里嵌着的 Word 原稿声明（:10pt / :14pt / :16pt / :9pt），不是浏览器渲染值。\ndefaults 只补原稿没写的地方——首行缩进原稿是逐段写的（正文 0.29in、居中行 0），所以这里不收进 defaults，只给居中段落显式归零。\n品种名（黑体 16pt 居中）与拼音（14pt）由原稿自己声明，本表不覆盖。\n用法：界面「样式核对 → 基准=期望样式表 → 读取文件」填本路径；无头任务里写 pair.styleSpec。"
+}
