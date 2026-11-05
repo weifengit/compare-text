@@ -101,10 +101,34 @@
     return (side === 'L' ? els.fileL : els.fileR).value || '';
   }
 
+  /**
+   * 两个文件选择框直接接受网址 / 本地 HTML 快照路径：
+   * 以前“网页对比”是顶部一个单独按钮 + 弹层，每换一次地址就要重新开弹窗；
+   * 输入框本来就是“这一侧装什么”的唯一入口，把网址并进来后语义才一致。
+   * 判定放在这里而不在 combobox：什么算网页源属于 Pipeline 的口径，不属于输入控件。
+   */
+  function freeTextRef(raw) {
+    var t = String(raw || '').trim();
+    if (!t) return '';
+    if (/^\/\//.test(t)) return 'https:' + t;          // //host/path 省略协议
+    if (/^https?:/i.test(t)) return t;
+    if (/^\/.*\.html?$/i.test(t)) return t;           // 本地 HTML 快照绝对路径
+    return '';
+  }
+
+  /** 给某个文件选择框接上自由文本提交（回车直接加载网址） */
+  function wireFreeText(sel) {
+    if (!sel || typeof sel._setFreeText !== 'function') return;
+    sel._setFreeText(freeTextRef);
+  }
+
   /** 把含 .cb 类的元素挂载为可搜索组合框；非组合框（如测试桩 / 原生字段下拉）保持原样 */
-  function mountCombo(el) {
+  function mountCombo(el, allowFreeText) {
     if (!el || !el.classList || !el.classList.contains('cb')) return;
-    if (root.Combobox && root.Combobox.attach) root.Combobox.attach(el);
+    if (root.Combobox && root.Combobox.attach) {
+      root.Combobox.attach(el);
+      if (allowFreeText) wireFreeText(el);
+    }
   }
 
   function init(c) {
@@ -117,8 +141,8 @@
     els.fileL = $('fileSelL');
     els.fileR = $('fileSelR');
     mountCombo(els.dir);
-    mountCombo(els.fileL);
-    mountCombo(els.fileR);
+    mountCombo(els.fileL, true);   // 两个文件框额外接受网址/快照路径（回车即加载）
+    mountCombo(els.fileR, true);
     if (els.dir) els.dir.addEventListener('change', function () {
       loadDir(els.dir.value).then(function () { if (cfg.onDirChange) cfg.onDirChange(); });
     });
@@ -136,6 +160,6 @@
 
   root.FilterBar = {
     init: init, reload: reload, setFields: setFields, getSelected: getSelected,
-    selectDir: selectDir, selectFile: selectFile
+    selectDir: selectDir, selectFile: selectFile, freeTextRef: freeTextRef
   };
 })(typeof self !== 'undefined' ? self : this);

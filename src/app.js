@@ -947,7 +947,7 @@
     FilterBar.init({
       getRoot: getSrcRoot,
       onFileChange: function (side, absPath) {
-        Pipeline.loadSide(side, absPath);
+        Pipeline.loadSide(side, absPath);   // 网址 / 快照路径 / 普通文件均走这一条（loadSide 内部按 isWebSource 分派）
         updateXlsxAffordance();
         // 选了非表格文件 → 退出表格模式，导出按钮恢复为 HTML 报告
         if (xlsxMode && !isXlsxPath(absPath)) resetXlsxMode();
@@ -956,54 +956,11 @@
       onDirChange: onDirChange
     });
   }
-  // ---------- 网页源入口（URL 直连 / 本地 HTML 快照） ----------
-  var webBtn = $('webBtn'), webMask = $('webMask'), webUrl = $('webUrl'), webSideSel = $('webSide'),
-    webContainerInput = $('webContainer'), webInline = $('webInline'), webErr = $('webErr'),
-    webOkBtn = $('webOkBtn'), webCancelBtn = $('webCancelBtn'), webCloseBtn = $('webCloseBtn');
-
-  function showWebErr(message) {
-    if (!webErr) return;
-    webErr.textContent = message;
-    webErr.classList.remove('hidden');
-  }
-  function openWebDialog() {
-    if (!webMask) return;
-    webMask.hidden = false;
-    webErr.classList.add('hidden');
-    setTimeout(function () { try { webUrl.focus(); webUrl.select(); } catch (e) {} }, 30);
-  }
-  function closeWebDialog() { if (webMask) webMask.hidden = true; }
-
-  /**
-   * 地址校验放宽到「像 URL 或像 .html 路径」：
-   * 局域网部署时用户会直接粘 http://内网IP/…，硬拦 https 反而挡了正当用法。
-   * 真正的出站安全（协议白名单 + 内网拦截）在 serve.js /api/fetch 那一层做。
-   */
-  function loadFromWebDialog() {
-    var ref = String(webUrl.value || '').trim();
-    if (!ref) { showWebErr('请输入 URL 或本地 HTML 快照路径'); return; }
-    if (!/^(https?:)?\/\//i.test(ref) && !/\.html?$/i.test(ref)) {
-      showWebErr('既不是 http(s) 地址，也不是 .html 文件路径');
-      return;
-    }
-    if (/^\/\//.test(ref)) ref = 'https:' + ref;            // //host/path 省略协议
-    var side = webSideSel.value === 'R' ? 'R' : 'L';
-    var opts = {
-      containerId: String(webContainerInput.value || '').trim() || undefined,
-      inlineAssets: !webInline || webInline.checked
-    };
-    closeWebDialog();
-    toast('正在加载网页…');
-    Pipeline.loadSide(side, ref, opts);
-  }
-
-  if (webBtn) webBtn.addEventListener('click', openWebDialog);
-  if (webOkBtn) webOkBtn.addEventListener('click', loadFromWebDialog);
-  if (webCancelBtn) webCancelBtn.addEventListener('click', closeWebDialog);
-  if (webCloseBtn) webCloseBtn.addEventListener('click', closeWebDialog);
-  if (webMask) webMask.addEventListener('click', function (ev) { if (ev.target === webMask) closeWebDialog(); });
-  if (webUrl) webUrl.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') loadFromWebDialog(); });
-
+  // ---------- 网页源：网址直接粘进「原始文件 / 修改文件」输入框 ----------
+  // 不再单独做一个顶部按钮 + 弹层：两个文件框本身就是“这一侧装什么”的唯一入口，
+  // 网址、本地 HTML 快照、普通文件走同一条路，换地址也不用重新开弹窗。
+  // 地址合法性与出站安全分属两层：像不像网页源由 FilterBar.freeTextRef 判断，
+  // 真正拦内网地址的守卫在 serve.js /api/fetch（Pipelin.loadSide → fetchHtml 经它出站）。
   // ---------- 样式核对面板 ----------
   var stylePanel = $('stylePanel'), styleBody = $('styleBody'), styleStats = $('styleStats'),
     styleBasisSel = $('styleBasisSel'), styleSpecBtn = $('styleSpecBtn'), styleSpecBox = $('styleSpecBox'),

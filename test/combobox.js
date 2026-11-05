@@ -197,5 +197,67 @@ check('Esc 关闭并恢复输入框显示', function () {
   if (h.children[1].hidden !== true) throw new Error('Esc 应关闭列表');
 });
 
+check('空格分词 = 逻辑 AND：多词同时命中才列入', function () {
+  var h = makeHost();
+  Combobox.attach(h);
+  h._setOpts([
+    { value: 's/1.docx', label: '1：当归药材上海标准.docx' },
+    { value: 's/2.docx', label: '2：酒当归药材湖南标准.docx' },
+    { value: 's/3.docx', label: '3：当归药材上海团标.docx' }
+  ]);
+  var inp = inputOf(h);
+  fire(inp, 'focus');
+  inp.value = '上海';
+  fire(inp, 'input');
+  var rows = rowsOf(h);
+  if (rows.length !== 2) throw new Error('“上海”应命中 2 项，实际 ' + rows.length);
+
+  inp.value = '上海 团';            // 两个词各自命中即可，不要求连在一起
+  fire(inp, 'input');
+  rows = rowsOf(h);
+  if (rows.length !== 1) throw new Error('“上海 团”应命中 1 项，实际 ' + rows.length);
+  if (rows[0].textContent.indexOf('团标') === -1) throw new Error('应命中“团标”那份，实际 ' + rows[0].textContent);
+
+  inp.value = '当归 湖南';          // 词序无关
+  fire(inp, 'input');
+  rows = rowsOf(h);
+  if (rows.length !== 1) throw new Error('“当归 湖南”应命中 1 项，实际 ' + rows.length);
+
+  inp.value = '上海 \u3000 药材';    // 全角空格同样算分隔符
+  fire(inp, 'input');
+  rows = rowsOf(h);
+  if (rows.length !== 2) throw new Error('全角空格应同样分隔，应命中 2 项，实际 ' + rows.length);
+});
+
+check('回车：有命中选高亮项，无命中则提交输入原文（网址）', function () {
+  var h = makeHost();
+  Combobox.attach(h);
+  var changed = [];
+  h.addEventListener('change', function () { changed.push(h.value); });
+  h._setOpts([{ value: 'p/a.docx', label: 'a.docx' }]);
+  // 网址是否算合法源由宿主判定（控件不管语义）
+  h._setFreeText(function (raw) { return /^https?:/.test(raw) ? raw : ''; });
+  var inp = inputOf(h);
+  fire(inp, 'focus');
+  inp.value = 'https://example.com/x.html';
+  fire(inp, 'input');
+  var rows = rowsOf(h);
+  if (rows.length !== 1 || rows[0].className !== 'cb-empty') throw new Error('网址不应命中任何文件');
+  fire(inp, 'keydown', { key: 'Enter', preventDefault: function () {} });
+  if (h.value !== 'https://example.com/x.html') throw new Error('回车应提交输入原文，实际 ' + h.value);
+  if (changed.length !== 1) throw new Error('应派发一次 change，实际 ' + changed.length);
+  if (inp.value !== 'https://example.com/x.html') throw new Error('输入框应保留网址，实际 ' + inp.value);
+
+  // 自由文本要能挺过选项重建（切子文件夹会重建 files 列表）
+  h._setOpts([{ value: 'p/b.docx', label: 'b.docx' }]);
+  if (h.value !== 'https://example.com/x.html') throw new Error('选项重建后网址不应被抹掉，实际 ' + h.value);
+  // 不在选项里、又不合法的文本不当成源
+  inp.value = '随便写的词';
+  fire(inp, 'focus'); fire(inp, 'input');
+  fire(inp, 'keydown', { key: 'Enter', preventDefault: function () {} });
+  if (h.value !== 'https://example.com/x.html') throw new Error('非法自由文本不应改变选中值，实际 ' + h.value);
+});
+
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 if (failed > 0) process.exit(1);

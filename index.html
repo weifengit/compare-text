@@ -46,16 +46,15 @@
     <div class="filterbar" id="filterbar">
       <button id="sidebarToggle" class="btn fb-toggle" type="button" aria-expanded="true" aria-controls="sidebar" title="展开 / 收起侧边栏">☰</button>
       <label class="fb-item">子文件夹 <span class="cb" id="dirSel" title="对比源下的子文件夹（输入过滤，点击选择）" data-placeholder="搜索子文件夹…"></span></label>
-      <label class="fb-item">原始文件 <span class="cb" id="fileSelL" title="左侧（原文）文件（输入过滤，点击选择）" data-placeholder="搜索原始文件…"></span></label>
+      <label class="fb-item">原始文件 <span class="cb" id="fileSelL" title="左侧（原文）：可输入网址（回车直接加载）或文件，多个关键词用空格分隔（同时命中才列入）" data-placeholder="文件 / 网址（空格分词）…"></span></label>
       <button id="swapBtn" class="btn fb-swap" type="button" title="左右互换：调换左右两侧的文件与内容">⇄</button>
-      <label class="fb-item">修改文件 <span class="cb" id="fileSelR" title="右侧（修改后）文件（输入过滤，点击选择）" data-placeholder="搜索修改文件…"></span></label>
+      <label class="fb-item">修改文件 <span class="cb" id="fileSelR" title="右侧（修改后）：可输入网址（回车直接加载）或文件，多个关键词用空格分隔（同时命中才列入）" data-placeholder="文件 / 网址（空格分词）…"></span></label>
       <div class="fb-actions">
         <button id="resetSplitBtn" class="btn" title="左右拖动调整列宽后，点击恢复左右两区等宽">重置居中</button>
         <button id="tidyBtn" class="btn primary" title="将两侧文本中多余的空格、制表符、换行符与空行统一整理为一行">修整</button>
         <button id="toggleEditorsBtn" class="btn" title="隐藏 / 显示主区域2（编辑区）">隐藏编辑区</button>
         <button id="foldBtn" class="btn" title="折叠 / 展开连续相同的行">折叠相同行</button>
         <button id="clearBtn" class="btn" title="清空加入比较的内容（编辑器与标注区）">清除</button>
-        <button id="webBtn" class="btn" title="加载网页：URL 直连（走本地代理）或站点原文快照，与本地文档并排对照">网页对比</button>
         <button id="exportReportBtn" class="btn" title="把当前对比结果导出为自包含 HTML 报告（含逐页快照与差异标注）">导出报告</button>
         <button id="xlsxCfgBtn" class="btn" hidden title="配置并对比表格（Excel）：多 Sheet、表头行范围、键列">表格对比配置</button>
       </div>
@@ -140,38 +139,6 @@
   </div>
 </div>
 
-<!-- 网页对比弹层：URL 直连或本地 HTML 快照 -->
-<div class="picker-mask" id="webMask" hidden>
-  <div class="picker web-dialog" role="dialog" aria-label="网页对比">
-    <div class="picker-head">
-      <span>加载网页</span>
-      <button id="webCloseBtn" class="btn" type="button" title="关闭">×</button>
-    </div>
-    <div class="web-form">
-      <label class="web-row">地址 / 快照路径
-        <input id="webUrl" type="text" placeholder="https://gdidc.gd.gov.cn/…/post_4922976.html　或本地 .html 绝对路径" spellcheck="false">
-      </label>
-      <label class="web-row">放到哪侧
-        <select id="webSide">
-          <option value="L">原文（左）</option>
-          <option value="R">修改（右）</option>
-        </select>
-      </label>
-      <label class="web-row">正文容器 id
-        <input id="webContainer" type="text" placeholder="留空＝自动识别（content_zw / vsb_content …）" spellcheck="false">
-      </label>
-      <label class="web-row web-check">
-        <input id="webInline" type="checkbox" checked> 内联外链样式（离线或抓取失败时自动退回浏览器默认样式并提示）
-      </label>
-      <div class="web-hint">URL 经本地代理 <code>/api/fetch</code> 出站（绕开 CORS、24h 缓存）；要长期复现请用站点原文快照。</div>
-    </div>
-    <div class="picker-err hidden" id="webErr"></div>
-    <div class="picker-foot">
-      <button id="webCancelBtn" class="btn" type="button">取消</button>
-      <button id="webOkBtn" class="btn primary" type="button">加载</button>
-    </div>
-  </div>
-</div>
 
 <!-- 扫描版 PDF OCR 确认弹窗 -->
 <div class="ocr-mask" id="ocrMask" hidden>

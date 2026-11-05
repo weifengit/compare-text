@@ -28,6 +28,7 @@
     var value = '';         // 当前选中 value
     var q = '';             // 过滤关键字（独立于输入框显示文本）
     var hi = 0;             // 键盘高亮索引（相对当前渲染行）
+    var stickyFree = '';    // 自由文本提交后的“不在选项里”的 value（网址/快照路径）
     var rows = [];          // 当前渲染行 [{opt, el}]
     var closeTimer = null;
 
@@ -47,6 +48,7 @@
     host.appendChild(list);
 
     function labelOf(v) {
+      if (v && v === stickyFree) return stickyFree;
       for (var i = 0; i < opts.length; i++) if (opts[i].value === v) return opts[i].label;
       return '';
     }
@@ -55,13 +57,48 @@
       input.value = labelOf(value);
     }
 
+    /**
+     * 空格分词 = 逻辑 AND：多个词全部命中才保留。
+     * 为什么不做“整串子串匹配”：文件名往往带“品种 + 产地 + 标准类型”，
+     * 用户能记住的是零散关键词（“上海 团”），整串匹配会一个都命中不了。
+     */
+    function terms() {
+      var t = String(q || '').toLowerCase();
+      if (!t) return [];
+      return t.split(/\s+/).filter(Boolean);
+    }
+
+    function hit(opt, word) {
+      return (opt.label && opt.label.toLowerCase().indexOf(word) !== -1) ||
+             (opt.value && opt.value.toLowerCase().indexOf(word) !== -1);
+    }
+
     function matched() {
-      var t = q.toLowerCase();
-      if (!t) return opts;
+      var list = terms();
+      if (!list.length) return opts;
       return opts.filter(function (o) {
-        return (o.label && o.label.toLowerCase().indexOf(t) !== -1) ||
-               (o.value && o.value.toLowerCase().indexOf(t) !== -1);
+        for (var i = 0; i < list.length; i++) if (!hit(o, list[i])) return false;
+        return true;
       });
+    }
+
+    /** 当前输入框里正在输入的原文（未选中时就是过滤词） */
+    function typed() { return String(input.value || '').trim(); }
+
+    /**
+     * 自由文本提交：没有命中项时，把输入原文当 value 提交。
+     * 过滤词不认网址语义——该不该算“可加载的源”由宿主注入的 host._freeText 判定，
+     * 否则模块会为了一个正则把 Pipeline 的职责搬到这里。
+     */
+    function commitTyped() {
+      if (typeof host._freeText !== 'function') return false;
+      var raw = typed();
+      if (!raw) return false;
+      var ref = host._freeText(raw);
+      if (!ref) return false;
+      stickyFree = String(ref);          // 不在选项里，但要挺过 _setOpts 重建
+      select({ value: stickyFree, label: stickyFree });
+      return true;
     }
 
     function applyActive() {
@@ -152,6 +189,7 @@
       else if (key === 'Enter') {
         ev.preventDefault();
         if (!list.hidden && rows[hi]) select(rows[hi].opt);
+        else commitTyped();   // 无命中/列表未开：输入原文就当网址/路径提交
       }
       else if (key === 'Escape') {
         ev.preventDefault();
@@ -166,7 +204,17 @@
     // ---- 宿主契约（对齐原生 <select> 的读取方式）----
     Object.defineProperty(host, 'value', {
       get: function () { return value; },
-      set: function (v) { value = v || ''; refreshInput(); },
+      /**
+       * 直接赋值（宿主恢复标签页、左右互换时用）：落在选项里就正常显示 label；
+       * 落在选项外（网址 / 快照路径）就登记为自由文本并原样显示，
+       * 否则输入框会变成空的——用户看到的是“网址丢了”，而实际还在 value 里。
+       */
+      set: function (v) {
+        value = v || '';
+        if (value && !opts.some(function (o) { return o.value === value; })) stickyFree = value;
+        else if (!value || value !== stickyFree) stickyFree = '';
+        refreshInput();
+      },
       configurable: true
     });
     Object.defineProperty(host, 'options', {
@@ -175,10 +223,18 @@
     });
     host._setOpts = function (items) {
       opts = (items || []).map(function (it) { return { value: it.value, label: it.label, text: it.text }; });
-      // 当前选中若已不在列表中则清空（与原生 select 重建行为一致）；在列表中则保留
-      if (value && !opts.some(function (o) { return o.value === value; })) value = '';
+      // 当前选中若已不在列表中则清空（与原生 select 重建行为一致）；在列表中则保留。
+      // 自由文本选中的网址不在列表里，但它是用户刚输入的意图，不能因列表重建被抹掉。
+      if (value && value !== stickyFree && !opts.some(function (o) { return o.value === value; })) {
+        value = '';
+        stickyFree = '';
+      }
       refreshInput();
       if (!list.hidden) render();
+    };
+    /** 注入“自由文本是否算合法源”的判定（宿主决定语义，控件只负责拿原文） */
+    host._setFreeText = function (fn) {
+      host._freeText = typeof fn === 'function' ? fn : null;
     };
 
     return true;

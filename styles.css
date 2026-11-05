@@ -1147,12 +1147,3 @@ table.sp-table td.sp-text { color: #445; max-width: 420px; overflow: hidden; tex
 .sp-spec-row input[type=text] { flex: 1 1 auto; font-size: 12px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; }
 .sp-spec-err { font-size: 12px; color: #c0392b; }
 
-/* 网页加载弹层 */
-.web-dialog { width: min(620px, 92vw); }
-.web-form { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
-.web-row { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #445; }
-.web-row input[type=text], .web-row select {
-  font-size: 13px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px;
-}
-.web-row.web-check { flex-direction: row; align-items: center; gap: 6px; }
-.web-hint { font-size: 12px; color: #667; line-height: 1.6; }
