@@ -26,6 +26,7 @@ node serve.js build             # 重建 Tauri 打包用的 dist/（一般由打
 
 - **多标签页**：浏览器风格标签栏，点 “＋” 开多个对比窗口，每个窗口独立保存文本/选项/PDF/对比源
 - **对比源 + 文件对比**：侧边栏设本地对比源，选子文件夹后自动以 原始=第一个 / 修改=第二个 文件立即渲染 PDF 面板与编辑区
+- **拖拽文件对比**：把文件从系统里直接拖进界面就能对比 —— 拖到左/右半区分别落到「原文 / 修改后」（拖动时遮罩指明落点），一次拖两个文件则自动配成 原文+修改后；纯文本 / Word / PDF / Excel 都支持，浏览器与桌面端行为一致
 - **PDF 面板**：自动缩放 / 适应宽度 / 适应页面 三种缩放（Ctrl+滚轮手动调比例），可全屏；高度弹性撑满（隐藏编辑区后自动利用释放空间）；拖拽不选中文字
 - **PDF 差异标注**：把对比差异直接标注在 PDF 页面上（变更/删除/新增分别用琥珀/红/绿背景色标出对应行）
 - 行级 + 字符级（词级）高亮
@@ -70,8 +71,10 @@ serve.js                零依赖静态服务器 + /api/*（含 build 子命令�
 src/normalize.js        归一化 + 分字符（纯逻辑，浏览器/Worker/Node 共用）
 src/compute.js          diff 计算管线（行级对齐、字符级高亮）
 src/source-api.js       /api 封装（列出对比源目录/文件，浏览器与桌面双模式）
+src/local-file.js        拖入文件的注册表（File → 可装载引用，blob URL）
 src/picker.js           文件夹选择弹层
 src/filterbar.js        子文件夹/原始文件/修改文件下拉与加载
+src/dropzone.js          拖入文件：落点判定、遮罩提示与两侧分派（浏览器 / 桌面原生拖放）
 src/pdfview.js          PDF 渲染与文本提取、差异标注
 src/syncscroll.js       跨区域协同滚动
 src/tabs.js             顶部多标签页栏
@@ -104,6 +107,8 @@ npm run test:ui      # 单独跑界面初始化/渲染（DOM 桩）
 npm run test:webstyle  # 单独跑样式向量提取与比对（纯文本，无浏览器）
 npm run test:fetch    # 单独跑 /api/fetch 代理（缓存/重定向/GBK 透传/内网拦截）
 npm run test:entry     # 单独跑“文件框即网址入口”：网址/快照入框、空格分词、回车直选
+npm run test:drop       # 单独跑拖入文件（引用登记 / 落点判定 / 两侧分派）
+npm run test:e2e:drop   # 浏览器端到端：真实拖拽两个文件出差异（需本机 Edge）
 npm run test:e2e:webview  # 浏览器端到端：网页渲染 + docx 样式核对差异为 0（需本机 Edge）
 npm run test:pdf     # 单独跑 PDF 多页切换
 npm run test:xlsx    # 单独跑 Excel 对比（读取/清洗/比对/报告生成/三视图）

@@ -16,10 +16,13 @@
 (function (root) {
   'use strict';
 
+  var MAX_EXTRA = 20;   // 拖入文件的选项上限：下拉是给人看的，不做无限堆积
+
   var cfg = { getRoot: null, onFileChange: null, onFieldPick: null, onDirChange: null };
   var els = { dir: null, field: null, fileL: null, fileR: null };
   var currentDir = null;   // 当前子文件夹绝对路径
   var files = [];          // 当前文件列表 [{name,size,ext}]
+  var extras = { L: [], R: [] };   // 不在对比源里的文件（拖入的文件），按侧各留一份
 
   function $(id) { return document.getElementById(id); }
 
@@ -40,14 +43,36 @@
     if (keep && items.some(function (it) { return it.value === keep; })) sel.value = keep;
   }
 
+  /** 当前目录的文件名 → 文件下拉选项 */
+  function dirItems(dirPath) {
+    if (!dirPath) return [];
+    return files.map(function (f) { return { value: dirPath + '/' + f.name, label: f.name }; });
+  }
+
+  /**
+   * 登记一个不在对比源里的文件选项（当前只有拖入的文件）。
+   * 不登记的话，组合框只能用一段内部引用（blobdrop/…）当显示文本，
+   * 而用户需要看到的是自己拖进来的文件名；登记后它就与普通文件一样躺在下拉里。
+   * 同名视为同一个文件：重复拖入只留最新那份，不把下拉堆成一堆同名项。
+   */
+  function addExtraOption(side, item) {
+    if (!item || !item.value || (side !== 'L' && side !== 'R')) return;
+    var label = item.label || item.value;
+    var list = extras[side].filter(function (it) { return it.label !== label; });
+    list.push({ value: item.value, label: label });
+    while (list.length > MAX_EXTRA) list.shift();
+    extras[side] = list;
+    var sel = side === 'L' ? els.fileL : els.fileR;
+    if (sel) fillSel(sel, dirItems(currentDir).concat(list));
+  }
+
   function loadDir(dirPath) {
     if (!dirPath) return Promise.resolve();
     currentDir = dirPath;
     return Source.list(dirPath).then(function (data) {
       files = data.files;
-      var items = files.map(function (f) { return { value: dirPath + '/' + f.name, label: f.name }; });
-      fillSel(els.fileL, items);
-      fillSel(els.fileR, items);
+      fillSel(els.fileL, dirItems(dirPath).concat(extras.L));
+      fillSel(els.fileR, dirItems(dirPath).concat(extras.R));
       // 不自动填充前两个文件：默认文件可能很大，自动选中并加载会造成明显卡顿；
       // 保持两侧留空，由用户手动从下拉选择后再触发加载。
     }).catch(function () { files = []; });
@@ -58,14 +83,14 @@
     var rootPath = cfg.getRoot();
     if (!rootPath) return Promise.resolve();
     return Source.list(rootPath).then(function (data) {
-      var dirItems = data.dirs.map(function (d) { return { value: rootPath + '/' + d, label: d }; });
-      if (dirItems.length === 0) {
+      var dirOpts = data.dirs.map(function (d) { return { value: rootPath + '/' + d, label: d }; });
+      if (dirOpts.length === 0) {
         fillSel(els.dir, [{ value: rootPath, label: '（根）' }]);
         return loadDir(rootPath);
       }
       var keep = els.dir.value;
-      fillSel(els.dir, dirItems);
-      if (!keep || !dirItems.some(function (d) { return d.value === keep; })) els.dir.value = dirItems[0].value;
+      fillSel(els.dir, dirOpts);
+      if (!keep || !dirOpts.some(function (d) { return d.value === keep; })) els.dir.value = dirOpts[0].value;
       return loadDir(els.dir.value);
     }).catch(function () { /* 路径无效等，静默 */ });
   }
@@ -160,6 +185,7 @@
 
   root.FilterBar = {
     init: init, reload: reload, setFields: setFields, getSelected: getSelected,
-    selectDir: selectDir, selectFile: selectFile, freeTextRef: freeTextRef
+    selectDir: selectDir, selectFile: selectFile, addExtraOption: addExtraOption,
+    freeTextRef: freeTextRef
   };
 })(typeof self !== 'undefined' ? self : this);

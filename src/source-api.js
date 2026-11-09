@@ -54,10 +54,16 @@
 
   /**
    * 取文件的可加载 URL（统一返回 Promise）。
+   * 拖入的文件（LocalFile 登记过）→ 直接给 Blob URL：它与磁盘文件在下游
+   * 完全同路，区别只是字节从内存来还是从磁盘来。
    * Tauri：Rust 命令读出字节 → Blob URL（pdf.js 与 fetch 都能直接用）。
    * 浏览器：/api/file 的 URL 字符串（同步可得，包一层 Promise 统一签名）。
    */
   function fileUrl(absPath) {
+    if (root.LocalFile && root.LocalFile.isRef(absPath)) {
+      var localUrl = root.LocalFile.url(absPath);
+      if (localUrl) return Promise.resolve(localUrl);
+    }
     if (isTauri) {
       return tauriCore.invoke('api_read_file', { path: absPath }).then(function (bytes) {
         var m = /\.[A-Za-z0-9]+$/.exec(absPath);
@@ -143,6 +149,10 @@
 
   /** 取文件原始字节（Excel 对比读表用，比 fileUrl 少一步 Blob URL 中转）。 */
   function readBytes(absPath) {
+    // 拖入的文件没有磁盘路径，只能经它自己的 Blob URL 取字节
+    if (root.LocalFile && root.LocalFile.isRef(absPath)) {
+      return fetch(root.LocalFile.url(absPath)).then(function (r) { return r.arrayBuffer(); });
+    }
     if (isTauri) {
       return tauriCore.invoke('api_read_file', { path: absPath }).then(function (arr) {
         // Rust 返回 Vec<u8> → JSON 数字数组；转成 Uint8Array 便于下游处理

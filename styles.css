@@ -1147,3 +1147,32 @@ table.sp-table td.sp-text { color: #445; max-width: 420px; overflow: hidden; tex
 .sp-spec-row input[type=text] { flex: 1 1 auto; font-size: 12px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; }
 .sp-spec-err { font-size: 12px; color: #c0392b; }
 
+
+/* ============================================================= 拖入文件：拖拽遮罩 */
+/* 遮罩只负责"告诉用户松手会落到哪一侧"，因此整块 pointer-events:none——
+   落点判定要 elementFromPoint 看到遮罩底下的真实元素（两侧文件框 / 左右半区），
+   遮罩自己若可命中，就会把自己算成落点。 */
+.drop-mask {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 95;
+  display: flex; gap: 10px; padding: 10px;
+  background: rgba(20, 30, 45, .35);
+  pointer-events: none;
+}
+.drop-mask[hidden] { display: none; }
+.drop-half {
+  flex: 1 1 50%; border: 2px dashed rgba(255, 255, 255, .5); border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  transition: border-color .12s, background .12s;
+}
+.drop-half.on {
+  border-color: var(--accent);
+  background: rgba(31, 111, 235, .18);
+  box-shadow: inset 0 0 0 2px rgba(31, 111, 235, .35);
+}
+.drop-half-label { font-size: 22px; font-weight: 700; letter-spacing: .1em; color: rgba(255, 255, 255, .72); }
+.drop-half.on .drop-half-label { color: #fff; }
+.drop-hint {
+  position: absolute; top: 24px; left: 50%; transform: translateX(-50%);
+  max-width: 78vw; padding: 8px 14px; border-radius: 6px;
+  background: rgba(20, 30, 45, .88); color: #fff; font-size: 13px; text-align: center;
+}

@@ -956,6 +956,36 @@
       onDirChange: onDirChange
     });
   }
+
+  // ---------- 拖入文件：把系统里的文件（或一对文件）直接拖进来对比 ----------
+  // 浏览器给的 File 没有磁盘路径，经 LocalFile 登记成引用后交给 Pipeline.loadSide——
+  // 该侧该渲染 PDF / Word / 表格还是纯文本，判定都在那条既有链路里，这里不重复一份。
+  // 桌面端（Tauri）原生拖放给的是真实路径，直接当引用用，同样走这一条。
+  function droppedRef(item) {
+    if (item.path) return item.path;
+    return (item.file && typeof LocalFile !== 'undefined') ? LocalFile.refFor(item.file) : '';
+  }
+
+  /** 拖入的文件落到两侧：登记成文件框选项 → 选中 → 触发既有装载链路 */
+  function onFilesDropped(items) {
+    var loaded = [];
+    items.forEach(function (item) {
+      var ref = droppedRef(item);
+      if (!ref) return;
+      if (FilterBar.addExtraOption) FilterBar.addExtraOption(item.side, { value: ref, label: item.name });
+      if (FilterBar.selectFile) FilterBar.selectFile(item.side, ref);
+      loaded.push(item.name + '（' + (item.side === 'L' ? '原文' : '修改后') + '）');
+    });
+    if (loaded.length) toast('已拖入：' + loaded.join('、'));
+  }
+
+  if (typeof DropZone !== 'undefined' && DropZone.init) {
+    DropZone.init({
+      onDrop: onFilesDropped,
+      onOverflow: function (n) { toast('一次最多拖入两个文件（本次 ' + n + ' 个），已取前两个', true); }
+    });
+  }
+
   // ---------- 网页源：网址直接粘进「原始文件 / 修改文件」输入框 ----------
   // 不再单独做一个顶部按钮 + 弹层：两个文件框本身就是“这一侧装什么”的唯一入口，
   // 网址、本地 HTML 快照、普通文件走同一条路，换地址也不用重新开弹窗。
