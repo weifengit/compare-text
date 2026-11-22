@@ -45,7 +45,7 @@ function cdpSend(method, params) {
     var timer = setTimeout(function () {
       delete pending[id];
       reject(new Error('CDP 调用超时：' + method));
-    }, 20000);
+    }, 30000);
     pending[id] = {
       resolve: function (v) { clearTimeout(timer); resolve(v); },
       reject: function (e) { clearTimeout(timer); reject(e); }
@@ -280,7 +280,7 @@ function buildXlsx(sheetName) {
   check('胶囊内容就是输入过的关键词', chips.labels.join(',') === '当归,上海', JSON.stringify(chips.labels));
   check('固化后输入框已清空（可以继续输入下一个词）', chips.input === '', JSON.stringify(chips.input));
 
-  // 删除一枚胶囊
+  // 删除一枚胶囊（此时胶囊是 ["当归","上海"]）
   await evaluate('(function(){var f=document.getElementById("fileSelL");'
     + 'f.querySelectorAll(".cb-chip .cb-chip-x")[0].click();return 1;})()');
   await wait(200);
@@ -290,6 +290,48 @@ function buildXlsx(sheetName) {
     + 'var labels=[];for(var i=0;i<cs.length;i++){labels.push(cs[i].querySelector(".cb-chip-label").textContent);}'
     + 'return JSON.stringify({count:cs.length,labels:labels});})()'));
   check('胶囊可逐个删除', afterDel.count === 1 && afterDel.labels[0] === '上海', JSON.stringify(afterDel.labels));
+
+  // ---------- 输入法（IME）组字：选字的空格不能形成胶囊 ----------
+  // 拼音输入法的真实事件序列：
+  //   keydown(空格, isComposing=true) → compositionupdate → compositionend → input
+  // 选字那次空格必须让给输入法，否则会把拼音串当成关键词（guang'dong 而不是 广东）。
+  var ime = JSON.parse(await evaluate([
+    '(function(){',
+    'var f=document.getElementById("fileSelL");',
+    'var inp=f.querySelector(".cb-input");',
+    // 先清掉上一轮用例留下的胶囊，让断言只看本次输入法行为
+    'var xs=f.querySelectorAll(".cb-chip .cb-chip-x");',
+    'for(var i=xs.length-1;i>=0;i--){xs[i].click();}',
+    'inp.focus();',
+    'inp.value="";',
+    // 组字开始：拼音串进入输入框
+    'inp.dispatchEvent(new CompositionEvent("compositionstart",{bubbles:true,data:""}));',
+    'inp.value="guangdong";',
+    'inp.dispatchEvent(new CompositionEvent("compositionupdate",{bubbles:true,data:"guangdong"}));',
+    'inp.dispatchEvent(new Event("input",{bubbles:true}));',
+    // 选字那一次空格：keydown 带 isComposing=true，必须放行给输入法
+    'var ev=new KeyboardEvent("keydown",{key:" ",bubbles:true,cancelable:true,isComposing:true});',
+    'inp.dispatchEvent(ev);',
+    'var prevented=ev.defaultPrevented;',
+    // 选字完成：拼音变成真实文字
+    'inp.value="广东";',
+    'inp.dispatchEvent(new CompositionEvent("compositionend",{bubbles:true,data:"广东"}));',
+    'inp.dispatchEvent(new Event("input",{bubbles:true}));',
+    'var afterIme={chips:f.querySelectorAll(".cb-chip").length,value:inp.value,prevented:prevented};',
+    // 选字完成后再按一次空格：这时才是真正的分词空格，应该形成胶囊
+    'var ev2=new KeyboardEvent("keydown",{key:" ",bubbles:true,cancelable:true,isComposing:false});',
+    'inp.dispatchEvent(ev2);',
+    'var cs=f.querySelectorAll(".cb-chip");',
+    'var labels=[];for(var i=0;i<cs.length;i++){labels.push(cs[i].querySelector(".cb-chip-label").textContent);}',
+    'return JSON.stringify({afterIme:afterIme,labels:labels,value:inp.value});})()'
+  ].join('')));
+  check('输入法选字的空格不会形成胶囊（拼音不被当成关键词）',
+    ime.afterIme.chips === 0 && ime.afterIme.value === '广东',
+    JSON.stringify(ime.afterIme));
+  check('输入法选字那一次空格没有被拦截（让给输入法选字）', ime.afterIme.prevented === false);
+  check('选字完成后再按空格，胶囊内容是选好的中文而非拼音',
+    ime.labels.length === 1 && ime.labels[0] === '广东',
+    JSON.stringify(ime.labels));
 
   // 清掉胶囊与下拉状态，避免影响后面的 Excel 选文件用例
   await evaluate('(function(){'

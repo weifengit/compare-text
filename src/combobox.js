@@ -33,6 +33,7 @@
     var q = '';             // 过滤关键字（独立于输入框显示文本）
     var chips = [];         // 已固化的过滤关键词（胶囊），与 q 一起参与匹配
     var userTyped = false;   // 输入框里当前内容是否为用户敲的（而非选中的文件名）
+    var composing = false;   // 输入法是否正在组字（compositionstart ~ compositionend 之间）
     var hi = 0;             // 键盘高亮索引（相对当前渲染行）
     var stickyFree = '';    // 自由文本提交后的“不在选项里”的 value（网址/快照路径）
     var rows = [];          // 当前渲染行 [{opt, el}]
@@ -266,13 +267,30 @@
       if (list.hidden) { hi = 0; render(); list.hidden = false; }
       else { hi = 0; render(); }
     });
+    // ---------- 输入法（IME）组字 ----------
+    // 拼音输入法用空格选字：组字期间 input.value 还是拼音串，必须让空格原样过去，
+    // 否则会把拼音当成关键词固化成胶囊（“guang'dong”而不是“广东”）。
+    input.addEventListener('compositionstart', function () { composing = true; });
+    input.addEventListener('compositionend', function () {
+      composing = false;
+      // 选字完成：此时拿到的才是真实文字（如「广东」），重新过滤一次
+      q = input.value;
+      userTyped = true;
+      if (list.hidden) { hi = 0; render(); list.hidden = false; }
+      else { hi = 0; render(); }
+    });
     input.addEventListener('keydown', function (ev) {
       var key = ev.key;
       if (key === 'ArrowDown') { ev.preventDefault(); move(1); }
       else if (key === 'ArrowUp') { ev.preventDefault(); move(-1); }
       else if (key === ' ' || key === 'Spacebar' || key === '\u3000') {
         // 胶囊模式：空格 = 把已输入的词固化成胶囊（而不是普通分隔符）
-        if (useChips && userTyped && String(input.value || '').trim()) {
+        // ⚠️ 输入法组字期间必须把空格让给输入法：拼音输入法用空格选字，
+        //    这时 input.value 还是拼音串（如 guang'dong），若此时固化胶囊就会把拼音当关键词。
+        //    两个信号一起看：ev.isComposing 是 keydown 自带的组字标记，
+        //    composing 是 compositionstart/end 维护的状态（兼容 isComposing 不可靠的浏览器）。
+        var imeComposing = !!(ev && ev.isComposing) || composing;
+        if (useChips && userTyped && !imeComposing && String(input.value || '').trim()) {
           ev.preventDefault();
           commitChip();
         }
@@ -295,7 +313,10 @@
         removeChip(chips.length - 1);
       }
     });
-    input.addEventListener('blur', scheduleClose);
+    input.addEventListener('blur', function () {
+      composing = false;   // 组字中途失焦可能收不到 compositionend，兜底复位，否则空格永远被当成选字
+      scheduleClose();
+    });
 
     // ---- 宿主契约（对齐原生 <select> 的读取方式）----
     Object.defineProperty(host, 'value', {

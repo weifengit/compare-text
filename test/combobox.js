@@ -430,5 +430,54 @@ check('非胶囊模式：空格仍是普通分隔符（子文件夹下拉不受�
 });
 
 
+
+check('胶囊模式：输入法组字期间的空格不形成胶囊（等选字之后的那次空格）', function () {
+  var h = makeChipHost();
+  h._setOpts([{ value: 's/1.docx', label: '1：广东标准.docx' }]);
+  var inp = inputOf(h);
+  fire(inp, 'focus');
+  // 组字开始：拼音串进入输入框
+  fire(inp, 'compositionstart', {});
+  inp.value = 'guangdong';
+  fire(inp, 'input');
+  // 选字那一次空格：isComposing = true → 必须放行给输入法，不能固化胶囊
+  var prevented = false;
+  fire(inp, 'keydown', { key: ' ', isComposing: true, preventDefault: function () { prevented = true; } });
+  if (prevented) throw new Error('输入法选字的空格不应被拦截');
+  if (chipsOf(h).length !== 0) throw new Error('组字期间不应生成胶囊（拼音不能当关键词）');
+  // 选字完成：拼音变成真实文字
+  inp.value = '广东';
+  fire(inp, 'compositionend', { data: '广东' });
+  fire(inp, 'input');
+  if (chipsOf(h).length !== 0) throw new Error('compositionend 本身不应生成胶囊');
+  // 选字完成后再按一次空格：这时才是真正的分词空格
+  fire(inp, 'keydown', { key: ' ', isComposing: false, preventDefault: function () {} });
+  var labels = chipLabels(h);
+  if (labels.length !== 1 || labels[0] !== '广东') {
+    throw new Error('应生成一枚“广东”胶囊（而不是拼音），实际 ' + JSON.stringify(labels));
+  }
+});
+
+check('胶囊模式：浏览器不报 isComposing 时也能靠 composition 事件挡住选字空格', function () {
+  var h = makeChipHost();
+  h._setOpts([{ value: 's/1.docx', label: '1：当归.docx' }]);
+  var inp = inputOf(h);
+  fire(inp, 'focus');
+  fire(inp, 'compositionstart', {});
+  inp.value = 'danggui';
+  fire(inp, 'input');
+  // 关键：keydown 上没有 isComposing（部分输入法/浏览器不填），只能靠 compositionstart 维护的状态
+  fire(inp, 'keydown', { key: ' ', preventDefault: function () {} });
+  if (chipsOf(h).length !== 0) throw new Error('组字未结束时不应生成胶囊');
+  inp.value = '当归';
+  fire(inp, 'compositionend', { data: '当归' });
+  fire(inp, 'input');
+  fire(inp, 'keydown', { key: ' ', preventDefault: function () {} });
+  var labels = chipLabels(h);
+  if (labels.length !== 1 || labels[0] !== '当归') {
+    throw new Error('选字完成后应固化“当归”，实际 ' + JSON.stringify(labels));
+  }
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 if (failed > 0) process.exit(1);
