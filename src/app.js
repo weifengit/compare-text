@@ -602,6 +602,8 @@
   var xlsxCfgBtn = $('xlsxCfgBtn');
   /** 当前是否处于表格对比模式（决定导出按钮的行为） */
   var xlsxMode = false;
+  var xlsxPopupTimer = null;   // 自动弹层的防抖句柄（两侧先后选完只弹一次）
+  var xlsxPopupDone = false;   // 本轮选择是否已自动弹过（避免每次改动都重复弹）
 
   function isXlsxPath(p) { return /\.xlsx$/i.test(String(p || '')); }
 
@@ -612,6 +614,37 @@
     var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
     var any = isXlsxPath(pL) || isXlsxPath(pR);
     xlsxCfgBtn.hidden = !any;
+    maybeAutoOpenXlsxConfig();
+  }
+
+  /**
+   * 两边都选好 .xlsx 后自动弹出对比设置浮层。
+   * 为什么自动弹：表格对比必须先定「比哪些 sheet、表头是哪几行、键列选哪几列」，
+   * 这些只有看过表才知道；而读完表再问一次是多余的步骤。选完文件就把面板摆出来，
+   * 用户看完可以直接「开始对比」，也可关掉走按钮手动再来。
+   * 防抖：两侧是先后选的，中间可能还会换文件；等一小会儿再判断，只弹一次。
+   */
+  function maybeAutoOpenXlsxConfig() {
+    if (typeof XlsxFlow === 'undefined' || typeof XlsxConfig === 'undefined') return;
+    var pL = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
+    var pR = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
+    if (!isXlsxPath(pL) || !isXlsxPath(pR)) {
+      // 不再两侧都是表格：清掉「已弹过」的标记，下次选齐时重新弹
+      xlsxPopupDone = false;
+      return;
+    }
+    if (xlsxPopupDone) return;
+    if (xlsxCfgBtn && xlsxCfgBtn.hidden) return;   // 按钮不可见时不自动弹
+    if (xlsxPopupTimer) clearTimeout(xlsxPopupTimer);
+    xlsxPopupTimer = setTimeout(function () {
+      xlsxPopupTimer = null;
+      var l = FilterBar.getSelected ? FilterBar.getSelected('L') : '';
+      var r = FilterBar.getSelected ? FilterBar.getSelected('R') : '';
+      if (!isXlsxPath(l) || !isXlsxPath(r)) return;   // 等的过程中又改了：不算数
+      if (XlsxConfig.isOpen && XlsxConfig.isOpen()) return;   // 已经开着就不重复
+      xlsxPopupDone = true;
+      openXlsxConfig();
+    }, 400);
   }
 
   /** 打开配置弹窗：先读两边 sheet 清单与预览，再交给 XlsxConfig 渲染 */
@@ -728,11 +761,15 @@
     updatePdfArea();   // 换了 sheet 后可能从"有内容"变"两侧都空"，需重算显隐
   }
 
-  if (xlsxCfgBtn) xlsxCfgBtn.addEventListener('click', openXlsxConfig);
+  if (xlsxCfgBtn) xlsxCfgBtn.addEventListener('click', function () {
+    xlsxPopupDone = true;   // 手动点过就不再自动弹（避免用户重复看到）
+    openXlsxConfig();
+  });
 
   /** 退出表格模式：清掉表格结果，恢复文本模式的按钮/状态栏语义 */
   function resetXlsxMode() {
     xlsxMode = false;
+    xlsxPopupDone = false;   // 退出表格模式后重新选文件时，允许再次自动弹层
     if (typeof XlsxFlow !== 'undefined') XlsxFlow.reset();
     if (typeof XlsxView !== 'undefined') XlsxView.reset();
     if (typeof SheetView !== 'undefined') SheetView.clear();
