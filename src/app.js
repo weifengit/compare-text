@@ -323,11 +323,13 @@
   });
 
   // ---------- 标注区域高度可调 ----------
+  var resultsUserH = null;   // 用户拖动标注区拖拽条设定的结果区高度（null = 交给自动分配）
   function clampResizeH(h) { return Math.max(110, Math.min(640, h)); }
   function onResizeMove(ev) {
     if (!resizeState || resizeState.mode !== 'results') return;
     var y = ev.touches ? ev.touches[0].clientY : ev.clientY;
     results.style.height = clampResizeH(resizeState.base + (y - resizeState.y)) + 'px';
+    resultsUserH = results.style.height;   // 手动拖过 → 记住用户高度，不再被自动分配覆盖
     queueRefitPage();
   }
   function onResizeUp() {
@@ -352,7 +354,10 @@
     var t = ev.touches && ev.touches[0];
     if (t) beginResize(t.clientY);
   }, { passive: false });
-  try { var storedH = localStorage.getItem(RESIZE_KEY); if (storedH) results.style.height = storedH; } catch (e) {}
+  try {
+    var storedH = localStorage.getItem(RESIZE_KEY);
+    if (storedH) { results.style.height = storedH; resultsUserH = storedH; }
+  } catch (e) {}
 
   // ---------- 左右列宽调整 ----------
   var SPLIT_KEY = 'diffchecker_split';
@@ -831,8 +836,63 @@
             && (WebView.isLoaded('L') || WebView.isLoaded('R')))
       || !!(typeof MdView !== 'undefined' && MdView.isLoaded
             && (MdView.isLoaded('L') || MdView.isLoaded('R')));
+    var wasHidden = pdfareaEl.classList.contains('hidden');
     pdfareaEl.classList.toggle('hidden', !hasPdf);
+    // 主区域3 显隐变了 → 三个区的高度分配要重算（否则它一出现就把主区域1 挤出可视区）
+    if (wasHidden !== pdfareaEl.classList.contains('hidden')) {
+      resultsUserH = null;    // 区域组合变了 → 重新按新组合自动分配（不再沿用手动拖的高度）
+      queueRefitPage();
+    }
   }
+  /**
+   * 按三个主区域的显隐状态重新分配高度。
+   * 规则（.layout 是纵向 flex 列，成员依次为 样式核对 / 主区域1 / 主区域2 / 主区域3）：
+   *   - 可见区域只剩一个时 → 它铺满 .layout 的全部可用高度；
+   *   - 可见两个时 → 平分；
+   *   - 三个都可见时 → 主区域1 与主区域3 各占一份，主区域2（编辑区）保留用户调过的高度。
+   * 为什么自己算而不用 flex：三个区域里有固定高度的用户可调项（编辑区）与拖拽条，
+   * 只有把它们的高度的先扣掉，剩下的才是可分配空间；纯 CSS 无法表达“扣掉固定项再平分”。
+   */
+  function applyAreaHeights() {
+    if (!layoutEl || !results) return;
+    // 全屏模式：主区域3 已由 CSS 拉满，不参与分配
+    if (pdfFocus) {
+      if (results.style) results.style.height = '';
+      return;
+    }
+    var area3Visible = !pdfareaEl.classList.contains('hidden');
+    var area2Visible = !editorsEl.classList.contains('hidden');
+    if (!layoutEl.getBoundingClientRect) return;   // 桩环境
+    var total = layoutEl.getBoundingClientRect().height;
+    if (!(total > 0)) return;
+    // 样式核对面板也占布局高度（可见时），不扣除就会被结果区顶出可视区
+    var styleEl = $('stylePanel');
+    var styleH = 0;
+    if (styleEl && !styleEl.hasAttribute('hidden') && styleEl.getBoundingClientRect) {
+      styleH = styleEl.getBoundingClientRect().height || 0;
+    }
+    // 不可分配的部分：编辑区（用户可调的固定高度）+ 拖拽条 + 样式面板
+    var fixed = styleH + 12 * 2;   // 两条拖拽条（#resultsResize / #editorsResize）
+    if (area2Visible) {
+      // 用 style.height（用户设定的值）而不是 offsetHeight：后者会被 flex 挤压而失真
+      var edH = parseInt(editorsEl.style.height, 10);
+      if (!(edH > 0)) edH = editorsEl.offsetHeight || 0;
+      fixed += edH;
+    }
+    // 用户手动拖过标注区拖拽条 → 尊重用户设定的高度，不再自动分配
+    var userH = parseInt(resultsUserH, 10);
+    if (userH > 0) {
+      if (results.style) results.style.height = userH + 'px';
+      return;
+    }
+    var free = total - fixed;
+    if (free < 120) free = 120;
+    // 主区域1 与主区域3 平分剩余空间；主区域3 隐藏时主区域1 独吞全部
+    var flexCount = area3Visible ? 2 : 1;
+    var h = Math.floor(free / flexCount);
+    if (results.style) results.style.height = h + 'px';
+  }
+
   function refitPageToPdf() {
     if (pdfFocus) return;                            // 全屏模式 PDF 不限高，无空档
     if (!layoutEl.getBoundingClientRect || !pdfareaEl.getBoundingClientRect) return;  // 桩环境
@@ -848,6 +908,8 @@
         appEl.style.minHeight = '0';
         appEl.style.height = vh + 'px';
       }
+      // 页面高度定下来后，.layout 才知道自己能分多少给各区域
+      applyAreaHeights();
       return;
     }
 
@@ -861,6 +923,8 @@
       appEl.style.minHeight = '0';
       appEl.style.height = Math.max(360, Math.round(appEl.getBoundingClientRect().height - gap)) + 'px';
     }
+    // 页面高度定下来后，.layout 才知道自己能分多少给各区域
+    applyAreaHeights();
   }
   var refitScheduled = false;
   function queueRefitPage() {
@@ -1142,6 +1206,7 @@
     editorsEl.classList.toggle('hidden', h);
     editorsResize.classList.toggle('hidden', h);
     toggleEditorsBtn.textContent = h ? '显示编辑区' : '隐藏编辑区';
+    resultsUserH = null;    // 区域组合变了 → 重新按新组合自动分配高度
     queueCmRefresh();
     queueRefitPage();
   }

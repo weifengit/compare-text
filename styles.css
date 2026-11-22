@@ -367,6 +367,8 @@ html, body {
   gap: 0;
   margin-top: 10px;
   height: 300px;   /* 高度可调：#editorsResize 拖拽 */
+  flex: 0 0 auto;         /* ★ 关键：编辑区高度是用户设定的固定值，不参与弹性伸缩，
+                              否则会被主区域1 挤压到 0（量到的 offsetHeight 也就失真了） */
   min-height: 0;
 }
 .edpane {
@@ -410,7 +412,9 @@ html, body {
   flex-direction: column;
   flex: 1;
   min-height: 120px;
-  max-height: 65vh;   /* 主区域3：原始PDF显示区，高度上限为界面高度的65% */
+  /* 高度上限交给 JS 按剩余空间算（applyAreaHeights）：只有主区域1 时它要能铺满整高，
+     所以不能再用固定百分比上限卡死。 */
+  max-height: none;
 }
 .pdf-controls {
   display: flex;
@@ -652,7 +656,9 @@ html, body {
 
 .results {
   margin: 0;
+  /* 高度由 JS 按各区域显隐实时计算（applyAreaHeights）：默认给一个合理初值 */
   height: calc((100vh - 380px) / 2);
+  flex: 0 0 auto;                /* 高度由 JS 定，不参与弹性伸缩 */
   min-height: 120px;
   background: var(--panel);
   border: 1px solid var(--border);
