@@ -22,7 +22,8 @@
     "test:e2e:webview": "node test/e2e-webview.js",
     "test:entry": "node test/web-entry.js",
     "test:drop": "node test/drop.js",
-    "test:e2e:drop": "node test/e2e-drop.js"
+    "test:e2e:drop": "node test/e2e-drop.js",
+    "test:e2e:layout": "node test/e2e-layout-chips.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
