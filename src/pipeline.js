@@ -415,6 +415,8 @@
     var host = p && p.firstChild;
     var isDocx = !!(host && (' ' + (host.className || '') + ' ').indexOf(' docx-host ') >= 0);
     if (isDocx && typeof DocxView !== 'undefined' && DocxView.isLoaded && DocxView.isLoaded(side) && DocxView.lineAtOffset) return DocxView;
+    var isMd = !!(host && (' ' + (host.className || '') + ' ').indexOf(' md-view ') >= 0);
+    if (isMd && typeof MdView !== 'undefined' && MdView.isLoaded && MdView.isLoaded(side) && MdView.lineAtOffset) return MdView;
     var isWeb = !!(host && String(host.className || '').indexOf('web-frame') >= 0);
     if (isWeb && typeof WebView !== 'undefined' && WebView.isLoaded && WebView.isLoaded(side) && WebView.lineAtOffset) return WebView;
     if (PdfView.isLoaded && PdfView.isLoaded(side) && PdfView.lineAtOffset) return PdfView;
@@ -608,8 +610,9 @@
   }
 
   /** 同侧只保留一种渲染：换源前把另外两个查看器清掉（与 PDF/docx 分支同一约定） */
+  /** 同侧只保留一种渲染：换源前把另外几个查看器清掉（与 PDF/docx 分支同一约定） */
   function clearOtherViewers(side, keep) {
-    ['PdfView', 'DocxView', 'WebView'].forEach(function (name) {
+    ['PdfView', 'DocxView', 'WebView', 'MdView'].forEach(function (name) {
       var view = root[name];
       if (view && name !== keep && view.clear) view.clear(side);
     });
@@ -778,7 +781,8 @@
       return;
     }
     sourceKind[side] = /\.pdf$/i.test(absPath) ? 'pdf'
-      : (/\.docx$/i.test(absPath) ? 'docx' : (/\.(xlsx|xlsm|xls)$/i.test(absPath) ? 'xlsx' : 'text'));
+      : (/\.docx$/i.test(absPath) ? 'docx' : (/\.(xlsx|xlsm|xls)$/i.test(absPath) ? 'xlsx'
+        : (/\.md$/i.test(absPath) ? 'md' : 'text')));
     // fileUrl 返回 Promise（Tauri 模式需先经 Rust 读字节转 Blob URL）
     Source.fileUrl(absPath).then(function (url) {
       if (stale()) return;
@@ -870,6 +874,30 @@
           cfg.onPanelsChanged();                 // docx 已渲染 → 重算主区域3 显隐
         }).catch(function (err) {
           if (!stale()) cfg.toast('加载 Word 文档失败：' + ((err && err.message) || err), true);
+        });
+      } else if (/\.md$/i.test(absPath)) {
+        if (PdfView.clear) PdfView.clear(side);      // 与 PDF 面板互斥：同侧只保留一种渲染
+        if (typeof DocxView !== 'undefined' && DocxView.clear) DocxView.clear(side);
+        if (typeof WebView !== 'undefined' && WebView.clear) WebView.clear(side);
+        fetch(url).then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status + (r.status === 404 ? '（文件不存在）' : ''));
+          return r.text();                        // 否则错误 JSON 会被当成文件内容灌进编辑器
+        }).then(function (text) {
+          if (stale()) return;
+          if (typeof MdView === 'undefined' || !MdView.load) {
+            // 查看器未加载：退回纯文本，不阻断对比
+            if (side === 'L') cfg.setText('L', text); else cfg.setText('R', text);
+            cfg.onPanelsChanged();
+            return;
+          }
+          return MdView.load(side, text, my).then(function () {
+            if (stale()) return;
+            MdView.setSourceText(side, text);       // 登记原文：标注行号坐标系就是 Markdown 源码行号
+            cfg.onPanelText(side, text);
+            cfg.onPanelsChanged();                 // Markdown 已渲染 → 重算主区域3 显隐
+          });
+        }).catch(function (err) {
+          if (!stale()) cfg.toast('加载 Markdown 失败：' + ((err && err.message) || err), true);
         });
       } else if (/\.doc$/i.test(absPath)) {
         // 旧版二进制 .doc 不支持（无法可靠解析），明确提示，不显示乱码

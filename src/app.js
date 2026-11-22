@@ -410,7 +410,8 @@
     if (PdfView.swap) PdfView.swap();
     if (DocxView.swap) DocxView.swap();
     if (typeof WebView !== 'undefined' && WebView.swap) WebView.swap();
-    Pipeline.resetCharMaps();                 // PDF 互换：作废旧字符表，待重算
+    if (typeof MdView !== 'undefined' && MdView.swap) MdView.swap();
+    Pipeline.resetCharMaps();                 // PDF 互换：作废字符表，待重算
     updateTabTitle();
     toast('已左右互换');
   }
@@ -434,6 +435,7 @@
     if (PdfView.clear) PdfView.clear();
     if (DocxView.clear) DocxView.clear();
     if (typeof WebView !== 'undefined' && WebView.clear) WebView.clear();
+    if (typeof MdView !== 'undefined' && MdView.clear) MdView.clear();
     hideStylePanel();
     updatePdfArea();                             // 清除后无 PDF → 隐藏主区域3
     Pipeline.resetCharMaps();
@@ -819,14 +821,16 @@
   // 自然布局在显示后自动对齐（同 HEAD 行为）；resize/拖拽/折叠等已有调用点负责显式重排。
   function updatePdfArea() {
     // 三种查看器共用主区域3：PDF / Word / Excel 表格。
-    // ⚠️ 新增查看器时必须同步加到这里，否则该类型加载成功后面板仍被判定为"无内容"而隐藏
+    // ⚠️ 新增查看器时必须同步加到这里，否则该类型加载成功后面板仍被判定为“无内容”而隐藏
     //（Excel 对比刚做完时就漏了 SheetView，导致主区域3 一直是空的）。
     var hasPdf = !!(PdfView.isLoaded && (PdfView.isLoaded('L') || PdfView.isLoaded('R')))
       || !!(DocxView.isLoaded && (DocxView.isLoaded('L') || DocxView.isLoaded('R')))
       || !!(typeof SheetView !== 'undefined' && SheetView.isLoaded
             && (SheetView.isLoaded('L') || SheetView.isLoaded('R')))
       || !!(typeof WebView !== 'undefined' && WebView.isLoaded
-            && (WebView.isLoaded('L') || WebView.isLoaded('R')));
+            && (WebView.isLoaded('L') || WebView.isLoaded('R')))
+      || !!(typeof MdView !== 'undefined' && MdView.isLoaded
+            && (MdView.isLoaded('L') || MdView.isLoaded('R')));
     pdfareaEl.classList.toggle('hidden', !hasPdf);
   }
   function refitPageToPdf() {
@@ -836,10 +840,6 @@
     appEl.style.height = '';
 
     var pdfHidden = pdfareaEl.classList.contains('hidden');
-
-    // 情况 A：主区域 3 隐藏（未加载 PDF）→ 以主区域 2（#layout）底部作为页面最下方
-    // 做法：把 #appRoot 高度锁到视口高度；#layout flex:1 自然吃掉剩余空间，
-    //       其底部即视口底部，侧边栏（#layout 列内）的"清空全部"也贴到视口底。
     if (pdfHidden) {
       var vh = (typeof window !== 'undefined' && window.innerHeight)
         || (document.documentElement && document.documentElement.clientHeight)
@@ -1131,6 +1131,7 @@
   if (PdfView.init) PdfView.init({ left: $('pdfLeft'), right: $('pdfRight') });
   if (typeof DocxView !== 'undefined' && DocxView.init) DocxView.init({ left: $('pdfLeft'), right: $('pdfRight') });
   if (typeof WebView !== 'undefined' && WebView.init) WebView.init({ left: $('pdfLeft'), right: $('pdfRight') });
+  if (typeof MdView !== 'undefined' && MdView.init) MdView.init({ left: $('pdfLeft'), right: $('pdfRight') });
   // 对比源路径输入框：点击弹出文件夹选择
   if (Picker && Picker.init) Picker.init({ input: srcPathInput, onPick: loadSrcPath });
 
@@ -1642,8 +1643,32 @@
             }).catch(function () {});
           })(side, path);
         }
-        else { if (PdfView.clear) PdfView.clear(side); if (DocxView.clear) DocxView.clear(side); updatePdfArea(); }
-      } else { if (PdfView.clear) PdfView.clear(side); if (DocxView.clear) DocxView.clear(side); updatePdfArea(); }
+        else if (/\.md$/i.test(path)) {
+          // 恢复 Markdown 面板（文本已在 tab state 的编辑器里，这里只重渲染主区域3）。
+          (function (sd, pth) {
+            if (PdfView.clear) PdfView.clear(sd);
+            if (typeof DocxView !== 'undefined' && DocxView.clear) DocxView.clear(sd);
+            Source.fileUrl(pth).then(function (url) {
+              return fetch(url).then(function (r) { return r.text(); });
+            }).then(function (text) {
+              if (typeof MdView === 'undefined' || !MdView.load) { updatePdfArea(); return; }
+              return MdView.load(sd, text).then(function () {
+                MdView.setSourceText(sd, text);
+                // 重渲染已作废该侧旧标注。仅当面板原文正是编辑器当前文本时，当前结果才是它的对比
+                // 结果 → 直接重落；否则交给随后的对比流程重标（免得把别的 tab 的结果画到这份文档上）
+                var cur = (sd === 'L' ? editorL.getValue() : editorR.getValue());
+                var res = Pipeline.getResult();
+                if (text && text === cur && res && !res.error) {
+                  var m = Pipeline.buildAnnotMaps(res);
+                  MdView.setHighlight(sd, sd === 'L' ? m.L : m.R);
+                }
+                updatePdfArea();
+              });
+            }).catch(function () {});
+          })(side, path);
+        }
+        else { if (PdfView.clear) PdfView.clear(side); if (DocxView.clear) DocxView.clear(side); if (typeof MdView !== 'undefined' && MdView.clear) MdView.clear(side); updatePdfArea(); }
+      } else { if (PdfView.clear) PdfView.clear(side); if (DocxView.clear) DocxView.clear(side); if (typeof MdView !== 'undefined' && MdView.clear) MdView.clear(side); updatePdfArea(); }
     }
   }
   function restorePdfFiles(tab) {
@@ -1653,6 +1678,7 @@
       if (FilterBar.selectFile) { FilterBar.selectFile('L', '', true); FilterBar.selectFile('R', '', true); }
       if (PdfView.clear) PdfView.clear();
       if (DocxView.clear) DocxView.clear();
+      if (typeof MdView !== 'undefined' && MdView.clear) MdView.clear();
       updatePdfArea();
       updateXlsxAffordance();          // 空白 tab：隐藏「表格对比配置」按钮
       if (xlsxMode) resetXlsxMode();
