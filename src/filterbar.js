@@ -148,10 +148,10 @@
   }
 
   /** 把含 .cb 类的元素挂载为可搜索组合框；非组合框（如测试桩 / 原生字段下拉）保持原样 */
-  function mountCombo(el, allowFreeText) {
+  function mountCombo(el, allowFreeText, chips) {
     if (!el || !el.classList || !el.classList.contains('cb')) return;
     if (root.Combobox && root.Combobox.attach) {
-      root.Combobox.attach(el);
+      root.Combobox.attach(el, { chips: !!chips });
       if (allowFreeText) wireFreeText(el);
     }
   }
@@ -166,8 +166,8 @@
     els.fileL = $('fileSelL');
     els.fileR = $('fileSelR');
     mountCombo(els.dir);
-    mountCombo(els.fileL, true);   // 两个文件框额外接受网址/快照路径（回车即加载）
-    mountCombo(els.fileR, true);
+    mountCombo(els.fileL, true, true);   // 两个文件框额外接受网址/快照路径（回车即加载）
+    mountCombo(els.fileR, true, true);   // 且空格分词会固化成胶囊（可逐个删除关键词）
     if (els.dir) els.dir.addEventListener('change', function () {
       loadDir(els.dir.value).then(function () { if (cfg.onDirChange) cfg.onDirChange(); });
     });

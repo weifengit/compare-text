@@ -274,6 +274,60 @@ html, body {
   box-sizing: border-box;
 }
 .cb-input:focus { outline: none; border-color: var(--accent); }
+/* 胶囊模式（原始文件 / 修改文件）：空格把已输入的关键词固化成可删除的小标签 */
+.cb-chips { max-width: 320px; }
+.cb-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  cursor: text;
+}
+.cb-box:focus-within { border-color: var(--accent); }
+.cb-chips .cb-input {
+  flex: 1 1 60px;
+  width: auto;
+  min-width: 60px;
+  padding: 1px 2px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+.cb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 1px 2px 1px 6px;
+  border-radius: 10px;
+  background: #eef3fa;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.cb-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-chip-x {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+.cb-chip-x:hover { background: #dde6f2; color: var(--accent); }
 .cb-list {
   position: absolute;
   top: calc(100% + 4px);
@@ -441,6 +495,72 @@ html, body {
 .docx-hl { border-radius: 2px; padding: 0 1px; }
 .docx-hl.docx-hl-rm, .docx-hl.docx-hl-rm * { color: var(--del-text) !important; background: var(--del-strong); }
 .docx-hl.docx-hl-ad, .docx-hl.docx-hl-ad * { color: var(--add-text) !important; background: var(--add-strong); }
+
+/* Markdown 渲染（主区域3 面板）：排版 + 差异标注配色与主区域1 的 .hl.rm/.hl.ad 同源 */
+.md-view {
+  padding: 4px 6px 16px;
+  color: var(--txt);
+  font: 14px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  background: #fff;
+  border-radius: 4px;
+}
+.md-view .md-line { display: block; }
+.md-loading { color: #e8eaed; text-align: center; padding: 30px 10px; font-size: 13px; }
+
+.md-h1, .md-h2, .md-h3, .md-h4, .md-h5, .md-h6 {
+  margin: 1.1em 0 .5em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.md-h1 { font-size: 1.7em; }
+.md-h2 { font-size: 1.45em; }
+.md-h3 { font-size: 1.25em; }
+.md-h4 { font-size: 1.1em; }
+.md-h5, .md-h6 { font-size: 1em; color: var(--muted); }
+
+.md-p { margin: .55em 0; }
+.md-hr { margin: 1.2em 0; border: none; border-top: 1px solid var(--border); }
+
+.md-blockquote { margin: .6em 0; padding: .2em 0 .2em .9em; border-left: 3px solid var(--border); color: var(--muted); }
+.md-quote { margin: .25em 0; }
+
+.md-list { margin: .5em 0; padding-left: 1.5em; counter-reset: mditem; }
+.md-li { position: relative; padding-left: .2em; margin: .2em 0; }
+.md-li::before { position: absolute; left: -1.1em; }
+.md-li:not(.md-li-ol)::before { content: '\2022'; color: var(--muted); }
+.md-li-ol::before { content: counter(mditem) '.'; counter-increment: mditem; color: var(--muted); }
+.md-li-nested { margin-left: 1.2em; }
+
+.md-pre {
+  margin: .7em 0;
+  padding: .7em .9em;
+  background: #f5f7fa;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.md-pre code { font-family: inherit; background: none; padding: 0; }
+.md-codeline { white-space: pre; }
+
+.md-table { border-collapse: collapse; width: 100%; margin: .7em 0; font-size: 13px; }
+.md-trow { display: table-row; }
+.md-table th, .md-table td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+.md-table th { background: #f5f7fa; font-weight: 600; }
+
+.md-view code { font-family: var(--mono); background: #f0f2f5; padding: 1px 4px; border-radius: 3px; font-size: .92em; }
+.md-view a { color: var(--accent); }
+.md-view img { max-width: 100%; height: auto; }
+
+.md-hl-para.md-hl-rm { background: var(--del-bg); }
+.md-hl-para.md-hl-ad { background: var(--add-bg); }
+.md-hl-para.md-hl-rm, .md-hl-para.md-hl-rm * { color: var(--del-text) !important; }
+.md-hl-para.md-hl-ad, .md-hl-para.md-hl-ad * { color: var(--add-text) !important; }
+.md-hl { border-radius: 2px; padding: 0 1px; }
+.md-hl.md-hl-rm, .md-hl.md-hl-rm * { color: var(--del-text) !important; background: var(--del-strong); }
+.md-hl.md-hl-ad, .md-hl.md-hl-ad * { color: var(--add-text) !important; background: var(--add-strong); }
 
 /* 全屏：挤压隐藏顶部第三行、主区域1 与 主区域2 */
 .app.pdf-focus .statusbar,

@@ -122,8 +122,19 @@ function check(name, fn) {
   catch (e) { failed++; console.log('FAIL  ' + name + '\n      ' + (e && e.message)); }
 }
 function fire(el, type, ev) { (el._listeners[type] || []).forEach(function (f) { f(ev || {}); }); }
-function inputOf(h) { return h.children[0]; }
-function rowsOf(h) { return h.children[1].children; }
+function findByClass(el, cls) {
+  if (!el) return null;
+  if (el.className === cls) return el;
+  var kids = el.children || [];
+  for (var i = 0; i < kids.length; i++) {
+    var hit = findByClass(kids[i], cls);
+    if (hit) return hit;
+  }
+  return null;
+}
+// 输入框与列表按 class 找（文件框是胶囊模式：input 被包在 .cb-box 里，不能按 children 下标取）
+function inputOf(h) { return findByClass(h, 'cb-input'); }
+function rowsOf(h) { var l = findByClass(h, 'cb-list'); return l ? l.children : []; }
 function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
 console.log('web entry / 文件框即网址入口\n');

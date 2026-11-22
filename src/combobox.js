@@ -7,10 +7,12 @@
  * 不依赖 app.js / filterbar（低耦合，按需引入）。
  * 全局暴露：Combobox
  *
- * Combobox.attach(hostEl) → boolean
+ * Combobox.attach(hostEl, settings) → boolean
  *   hostEl 形如 <span class="cb" id="..." data-placeholder="搜索…"></span>，
  *   挂载后内部生成 <input class="cb-input"> + <ul class="cb-list">。
  *   选项格式 {value, label}：value 为绝对路径等唯一键，label 为显示名。
+ *   settings.chips = true 时启用「胶囊」模式：每按一次空格，输入框里已输入的词就固化成
+ *   一个可删除的小标签（胶囊），胶囊与正在输入的词一起参与过滤（逻辑 AND）。
  */
 (function (root) {
   'use strict';
@@ -21,12 +23,16 @@
    * @param {Element} host  目标容器（含 .cb 类）
    * @returns {boolean} 是否成功挂载（重复挂载 / 非容器返回 false）
    */
-  function attach(host) {
+  function attach(host, settings) {
     if (!host || host._setOpts) return false;
+    settings = settings || {};
+    var useChips = !!settings.chips;   // 胶囊模式：空格把已输入的关键词固化下来
 
     var opts = [];          // [{value,label,text?}]
     var value = '';         // 当前选中 value
     var q = '';             // 过滤关键字（独立于输入框显示文本）
+    var chips = [];         // 已固化的过滤关键词（胶囊），与 q 一起参与匹配
+    var userTyped = false;   // 输入框里当前内容是否为用户敲的（而非选中的文件名）
     var hi = 0;             // 键盘高亮索引（相对当前渲染行）
     var stickyFree = '';    // 自由文本提交后的“不在选项里”的 value（网址/快照路径）
     var rows = [];          // 当前渲染行 [{opt, el}]
@@ -40,8 +46,17 @@
     input.spellcheck = false;
     var ph = host.getAttribute && host.getAttribute('data-placeholder');
     if (ph) input.placeholder = ph;
-    host.appendChild(input);
-
+    // 胶囊模式：输入框与已固化的关键词放在同一个可换行的盒子里（共用一条边框）
+    var box = null;
+    if (useChips) {
+      if (host.classList && host.classList.add) host.classList.add('cb-chips');
+      box = document.createElement('span');
+      box.className = 'cb-box';
+      host.appendChild(box);
+      box.appendChild(input);
+    } else {
+      host.appendChild(input);
+    }
     var list = document.createElement('ul');
     list.className = 'cb-list';
     list.hidden = true;
@@ -55,6 +70,7 @@
     /** 输入框显示当前选中项名称（无选中为空，占位符兜底） */
     function refreshInput() {
       input.value = labelOf(value);
+      userTyped = false;      // 显示的是选中的文件名，不是用户敲的过滤词
     }
 
     /**
@@ -63,9 +79,74 @@
      * 用户能记住的是零散关键词（“上海 团”），整串匹配会一个都命中不了。
      */
     function terms() {
+      var out = chips.map(function (c) { return String(c).toLowerCase(); });
       var t = String(q || '').toLowerCase();
-      if (!t) return [];
-      return t.split(/\s+/).filter(Boolean);
+      if (t) out = out.concat(t.split(/\s+/).filter(Boolean));
+      return out;
+    }
+
+    /** 渲染胶囊：已固化的关键词各一个标签，带删除按钮 */
+    function renderChips() {
+      if (!useChips || !box) return;
+      var old = box.querySelectorAll ? box.querySelectorAll('.cb-chip') : [];
+      for (var i = 0; i < old.length; i++) {
+        if (old[i].remove) old[i].remove();
+        else if (old[i].parentNode && old[i].parentNode.removeChild) old[i].parentNode.removeChild(old[i]);
+      }
+      chips.forEach(function (word, idx) {
+        var chip = document.createElement('span');
+        chip.className = 'cb-chip';
+        var label = document.createElement('span');
+        label.className = 'cb-chip-label';
+        label.textContent = word;
+        var del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'cb-chip-x';
+        del.title = '删除该关键词';
+        del.textContent = '×';
+        del.setAttribute('aria-label', '删除关键词 ' + word);
+        // mousedown preventDefault：避免点击删除时输入框失焦导致列表关闭
+        del.addEventListener('mousedown', function (ev) { if (ev && ev.preventDefault) ev.preventDefault(); });
+        del.addEventListener('click', function () { removeChip(idx); });
+        chip.appendChild(label);
+        chip.appendChild(del);
+        if (box.insertBefore) box.insertBefore(chip, input);
+        else box.appendChild(chip);
+      });
+    }
+
+    /** 删掉一个胶囊并重新过滤 */
+    function removeChip(idx) {
+      chips.splice(idx, 1);
+      q = '';
+      input.value = '';
+      renderChips();
+      hi = 0;
+      render();
+      if (list.hidden) list.hidden = false;
+    }
+
+    /**
+     * 空格：把当前输入框里的内容固化成胶囊（胶囊模式）。
+     * 为什么这样切：文件名往往带“品种 + 产地 + 标准类型”，用户能记住的是零散关键词；
+     * 把已输入的词固化成胶囊，既看得见已经加了哪几个条件（可逐个删），
+     * 又不影响继续输入下一个词。
+     */
+    function commitChip() {
+      var word = String(input.value || '').trim();
+      if (!word) return false;
+      // 一次可能敲进多个词（粘贴含空格的内容）：逐个拆成胶囊
+      var parts = word.split(/\s+/).filter(Boolean);
+      for (var i = 0; i < parts.length; i++) {
+        if (chips.indexOf(parts[i]) === -1) chips.push(parts[i]);
+      }
+      input.value = '';
+      q = '';
+      renderChips();
+      hi = 0;
+      render();
+      if (list.hidden) list.hidden = false;
+      return true;
     }
 
     function hit(opt, word) {
@@ -137,11 +218,11 @@
       if (hi < 0) hi = 0;
       applyActive();
     }
-
     function open() {
       if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
-      q = '';      // 聚焦即浏览全部：清空上次过滤
+      q = '';      // 聚焦即浏览全部：清空上次过滤（胶囊保留：那才是用户要的条件）
       hi = 0;
+      renderChips();
       render();
       list.hidden = false;
       if (value && input.select) input.select();   // 已有选中：全选文本，输入即替换
@@ -158,7 +239,9 @@
     function select(opt) {
       value = opt.value;
       q = '';
+      chips = [];          // 已选中的文件不再需要过滤条件
       hi = 0;
+      renderChips();
       refreshInput();
       close();
       // 派发可冒泡 change：filterbar 通过 addEventListener('change') 接收
@@ -179,6 +262,7 @@
     input.addEventListener('focus', open);
     input.addEventListener('input', function () {
       q = input.value;
+      userTyped = true;
       if (list.hidden) { hi = 0; render(); list.hidden = false; }
       else { hi = 0; render(); }
     });
@@ -186,6 +270,13 @@
       var key = ev.key;
       if (key === 'ArrowDown') { ev.preventDefault(); move(1); }
       else if (key === 'ArrowUp') { ev.preventDefault(); move(-1); }
+      else if (key === ' ' || key === 'Spacebar' || key === '\u3000') {
+        // 胶囊模式：空格 = 把已输入的词固化成胶囊（而不是普通分隔符）
+        if (useChips && userTyped && String(input.value || '').trim()) {
+          ev.preventDefault();
+          commitChip();
+        }
+      }
       else if (key === 'Enter') {
         ev.preventDefault();
         if (!list.hidden && rows[hi]) select(rows[hi].opt);
@@ -197,6 +288,11 @@
       }
       else if (key === 'Tab') {
         if (!list.hidden && rows[hi]) { ev.preventDefault(); select(rows[hi].opt); }
+      }
+      else if (key === 'Backspace' && useChips && !input.value && chips.length) {
+        // 输入框空了再按退格：删掉最后一个胶囊（比逐个删更快）
+        ev.preventDefault();
+        removeChip(chips.length - 1);
       }
     });
     input.addEventListener('blur', scheduleClose);

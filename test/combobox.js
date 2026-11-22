@@ -33,11 +33,34 @@ function mkEl(id, classes) {
     addEventListener: function (type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); },
     dispatchEvent: function (ev) { (this._listeners[ev.type] || []).forEach(function (f) { f(ev || {}); }); },
     dispatch: function (type, ev) { (this._listeners[type] || []).forEach(function (f) { f(ev || {}); }); },
-    appendChild: function (el2) { this.children.push(el2); },
+    appendChild: function (el2) { el2.parentNode = this; this.children.push(el2); },
+    insertBefore: function (el2, ref) {
+      el2.parentNode = this;
+      var i = this.children.indexOf(ref);
+      if (i < 0) this.children.push(el2); else this.children.splice(i, 0, el2);
+    },
+    removeChild: function (el2) {
+      var i = this.children.indexOf(el2);
+      if (i >= 0) { this.children.splice(i, 1); el2.parentNode = null; }
+    },
+    querySelectorAll: function (sel) {
+      var cls = sel.replace(/^\./, '');
+      var out = [];
+      (function walk(node) {
+        var kids = node.children || [];
+        for (var i = 0; i < kids.length; i++) {
+          if (kids[i].className === cls) out.push(kids[i]);
+          walk(kids[i]);
+        }
+      })(this);
+      return out;
+    },
     setAttribute: function (k, v) { this._attrs[k] = v; },
     getAttribute: function (k) { return k in this._attrs ? this._attrs[k] : null; },
     select: function () {},
-    remove: function () {}
+    remove: function () {
+      if (this.parentNode && this.parentNode.removeChild) this.parentNode.removeChild(this);
+    }
   };
   // textContent 赋值同时清空 children，保证重渲染后 children 反映最新结构
   Object.defineProperty(el, 'textContent', {
@@ -71,8 +94,26 @@ function makeHost(ph) {
   return h;
 }
 function fire(el, type, ev) { (el._listeners[type] || []).forEach(function (f) { f(ev || {}); }); }
-function inputOf(h) { return h.children[0]; }
-function rowsOf(h) { return h.children[1].children; }
+function findByClass(el, cls) {
+  if (!el) return null;
+  if (el.className === cls) return el;
+  var kids = el.children || [];
+  for (var i = 0; i < kids.length; i++) {
+    var hit = findByClass(kids[i], cls);
+    if (hit) return hit;
+  }
+  return null;
+}
+// 按 class 找（胶囊模式下 input 被包在 .cb-box 里，不能按 children 下标取）
+function inputOf(h) { return findByClass(h, 'cb-input'); }
+function rowsOf(h) { var l = findByClass(h, 'cb-list'); return l ? l.children : []; }
+function chipsOf(h) { return h.querySelectorAll ? h.querySelectorAll('.cb-chip') : []; }
+function chipLabels(h) {
+  return chipsOf(h).map(function (c) {
+    var lb = c.querySelectorAll('.cb-chip-label')[0];
+    return lb ? lb.textContent : '';
+  });
+}
 
 console.log('combobox\n');
 
@@ -256,6 +297,136 @@ check('回车：有命中选高亮项，无命中则提交输入原文（网址�
   fire(inp, 'focus'); fire(inp, 'input');
   fire(inp, 'keydown', { key: 'Enter', preventDefault: function () {} });
   if (h.value !== 'https://example.com/x.html') throw new Error('非法自由文本不应改变选中值，实际 ' + h.value);
+});
+
+// ---------- 胶囊模式（原始文件 / 修改文件：空格把关键词固化成可删除的标签） ----------
+function makeChipHost() {
+  var h = makeHost('文件 / 网址（空格分词）…');
+  Combobox.attach(h, { chips: true });
+  return h;
+}
+
+check('胶囊模式：按空格把已输入的词固化成胶囊，输入框清空', function () {
+  var h = makeChipHost();
+  h._setOpts([
+    { value: 's/1.docx', label: '1：当归药材上海标准.docx' },
+    { value: 's/2.docx', label: '2：酒当归药材湖南标准.docx' },
+    { value: 's/3.docx', label: '3：当归药材上海团标.docx' }
+  ]);
+  var inp = inputOf(h);
+  fire(inp, 'focus');
+  inp.value = '上海';
+  fire(inp, 'input');
+  fire(inp, 'keydown', { key: ' ', preventDefault: function () {} });
+  var labels = chipLabels(h);
+  if (labels.length !== 1 || labels[0] !== '上海') {
+    throw new Error('应生成一枚“上海”胶囊，实际 ' + JSON.stringify(labels));
+  }
+  if (inp.value !== '') throw new Error('固化后输入框应清空，实际 ' + JSON.stringify(inp.value));
+});
+
+check('胶囊模式：多枚胶囊一起参与过滤（逻辑 AND）', function () {
+  var h = makeChipHost();
+  h._setOpts([
+    { value: 's/1.docx', label: '1：当归药材上海标准.docx' },
+    { value: 's/2.docx', label: '2：酒当归药材湖南标准.docx' },
+    { value: 's/3.docx', label: '3：当归药材上海团标.docx' }
+  ]);
+  var inp = inputOf(h);
+  fire(inp, 'focus');
+  inp.value = '上海';
+  fire(inp, 'input');
+  fire(inp, 'keydown', { key: ' ', preventDefault: function () {} });
+  inp.value = '团';
+  fire(inp, 'input');
+  fire(inp, 'keydown', { key: ' ', preventDefault: function () {} });
+  var labels = chipLabels(h);
+  if (labels.length !== 2 || labels.join(',') !== '上海,团') {
+    throw new Error('应有两枚胶囊，实际 ' + JSON.stringify(labels));
+  }
+  var rows = rowsOf(h);
+  if (rows.length !== 1) throw new Error('两枚胶囊应共同过滤出 1 项，实际 ' + rows.length);
+  if (rows[0].textContent.indexOf('团标') === -1) {
+    throw new Error('应命中“团标”那份，实际 ' + rows[0].textContent);
+  }
+});
+
+check('胶囊模式：删除按钮能去掉一枚胶囊并重算过滤', function () {
+  var h = makeChipHost();
+  h._setOpts([
+    { value: 's/1.docx', label: '1：当归药材上海标准.docx' },
+    { value: 's/2.docx', label: '2：酒当归药材湖南标准.docx' },
+    { value: 's/3.docx', label: '3：当归药材上海团标.docx' }
+  ]);
+  var inp = inputOf(h);
+  fire(inp, 'focus');
+  inp.value = '上海';
+  fire(inp, 'input');
+  fire(inp, 'keydown', { key: ' ', preventDefault: function () {} });
+  inp.value = '团';
+  fire(inp, 'input');
+  fire(inp, 'keydown', { key: ' ', preventDefault: function () {} });
+  var chips = chipsOf(h);
+  var x = chips[0].querySelectorAll('.cb-chip-x')[0];
+  if (!x) throw new Error('胶囊应带删除按钮');
+  fire(x, 'click');
+  var labels = chipLabels(h);
+  if (labels.length !== 1 || labels[0] !== '团') {
+    throw new Error('删掉第一枚后应只剩“团”，实际 ' + JSON.stringify(labels));
+  }
+  var rows = rowsOf(h);
+  if (rowsOf(h).length !== 1) throw new Error('只剩一枚“团”应命中 1 项（团标那份），实际 ' + rowsOf(h).length);
+});
+
+check('胶囊模式：输入框空时按退格删掉最后一枚胶囊', function () {
+  var h = makeChipHost();
+  h._setOpts([{ value: 's/1.docx', label: '1：上海.docx' }]);
+  var inp = inputOf(h);
+  fire(inp, 'focus');
+  inp.value = '上海';
+  fire(inp, 'input');
+  fire(inp, 'keydown', { key: ' ', preventDefault: function () {} });
+  inp.value = '团';
+  fire(inp, 'input');
+  fire(inp, 'keydown', { key: ' ', preventDefault: function () {} });
+  if (chipLabels(h).length !== 2) throw new Error('应有两枚胶囊');
+  inp.value = '';
+  fire(inp, 'keydown', { key: 'Backspace', preventDefault: function () {} });
+  var labels = chipLabels(h);
+  if (labels.length !== 1 || labels[0] !== '上海') {
+    throw new Error('退格应删掉最后一枚，实际 ' + JSON.stringify(labels));
+  }
+});
+
+check('胶囊模式：选中文件后清空胶囊（不再需要过滤条件）', function () {
+  var h = makeChipHost();
+  h._setOpts([{ value: 's/1.docx', label: '1：上海.docx' }]);
+  var inp = inputOf(h);
+  fire(inp, 'focus');
+  inp.value = '上海';
+  fire(inp, 'input');
+  fire(inp, 'keydown', { key: ' ', preventDefault: function () {} });
+  if (chipLabels(h).length !== 1) throw new Error('应有一枚胶囊');
+  var rows = rowsOf(h);
+  if (rows.length !== 1) throw new Error('应命中 1 项');
+  fire(rows[0], 'click');
+  if (chipLabels(h).length !== 0) throw new Error('选中后应清空胶囊');
+  if (h.value !== 's/1.docx') throw new Error('应选中该项，实际 ' + h.value);
+});
+
+check('非胶囊模式：空格仍是普通分隔符（子文件夹下拉不受影响）', function () {
+  var h = makeHost();
+  Combobox.attach(h);
+  h._setOpts([
+    { value: 'd/1', label: '子夹一' },
+    { value: 'd/2', label: '子夹二' }
+  ]);
+  var inp = inputOf(h);
+  fire(inp, 'focus');
+  inp.value = '子夹 一';
+  fire(inp, 'input');
+  if (chipsOf(h).length !== 0) throw new Error('非胶囊模式不应生成胶囊');
+  if (rowsOf(h).length !== 1) throw new Error('空格仍应作分词符（“子夹 一”只命中“子夹一”）');
 });
 
 
