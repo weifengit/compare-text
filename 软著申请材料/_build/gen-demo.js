@@ -211,6 +211,50 @@ function docxFromBlocks(title, blocks, outDocx) {
   console.log('  ' + path.basename(outDocx) + '  ' + (buf.length / 1024).toFixed(0) + 'KB');
 }
 
+// ---------------------------------------------------------------- V1.4 演示件
+/**
+ * 网页对比演示件：一份真实网页原稿快照（HTML）+ 一份由它「还原」出的 docx。
+ * 两者开在同一界面里，软件会逐段比对版式声明，把还原稿没有忠实原稿的地方列出来。
+ * 为了让手册里这张表不是空的，还原稿故意留下四处典型还原偏差（字号、对齐、首行缩进）。
+ * 快照与基准 docx 取自仓库 test/fixtures 的真实样本，因此演示件也是可复现的。
+ */
+async function webDemoPair(srcHtml, srcDocx, outHtml, outDocx) {
+  fs.copyFileSync(srcHtml, outHtml);
+  var JSZip = require(path.join(ROOT, 'lib', 'jszip.min.js'));
+  var zip = await JSZip.loadAsync(fs.readFileSync(srcDocx));
+  var doc = await zip.file('word/document.xml').async('string');
+  // 按段落切块（保留分隔符），定位到真正的 <w:p 块序号后逐处退化
+  var segs = doc.split(/(?=<w:p\b)/);
+  var paraIdx = [];
+  segs.forEach(function (s, i) { if (/^<w:p\b/.test(s)) paraIdx.push(i); });
+  [[4, 'sz'], [7, 'jc'], [10, 'ind'], [13, 'sz']].forEach(function (e) {
+    var i = paraIdx[e[0]];
+    if (!i) return;
+    var seg = segs[i];
+    if (e[1] === 'sz') {
+      segs[i] = seg.replace(/w:sz w:val="20"/g, 'w:sz w:val="18"')
+        .replace(/w:szCs w:val="20"/g, 'w:szCs w:val="18"');
+    } else if (e[1] === 'jc') {
+      segs[i] = seg.replace(/<w:jc w:val="left"\/>/, '<w:jc w:val="both"/>');
+    } else {
+      segs[i] = seg.replace(/<w:ind[^>]*\/>/, '');
+    }
+  });
+  zip.file('word/document.xml', segs.join(''));
+  var buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  fs.writeFileSync(outDocx, buf);
+  console.log('  ' + path.basename(outHtml) + ' + ' + path.basename(outDocx) +
+    '  ' + (buf.length / 1024).toFixed(0) + 'KB');
+}
+
+/** Markdown 演示件：同一份说明书的两个版本，差异兼有正文与结构（标题、列表、表格、代码块） */
+function mdPair(outDir, aName, bName, aText, bText) {
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(path.join(outDir, aName), aText);
+  fs.writeFileSync(path.join(outDir, bName), bText);
+  console.log('  ' + aName + ' / ' + bName);
+}
+
 // ---------------------------------------------------------------- 主流程
 (async function main() {
   fs.mkdirSync(TMP, { recursive: true });
@@ -305,6 +349,17 @@ function docxFromBlocks(title, blocks, outDocx) {
 
   docxFromBlocks('文件对比工具使用说明书（草案）', MANUAL_DRAFT, path.join(DEMO, '说明书-草案.docx'));
   docxFromBlocks('文件对比工具使用说明书（修订稿）', MANUAL_REVISED, path.join(DEMO, '说明书-修订.docx'));
+
+  console.log('生成网页对比演示件（快照 HTML + 还原 docx，带四处典型还原偏差）：');
+  fs.mkdirSync(WEB, { recursive: true });
+  await webDemoPair(
+    path.join(ROOT, 'test', 'fixtures', 'gdherb-std.html'),
+    path.join(ROOT, 'test', 'fixtures', 'gdherb-std.docx'),
+    path.join(WEB, '广东中药材标准-网页原稿快照.html'),
+    path.join(WEB, '广东中药材标准-还原稿.docx'));
+
+  console.log('生成 Markdown 演示件：');
+  mdPair(MD, '发布说明-草案.md', '发布说明-修订.md', MD_DRAFT, MD_REVISED);
 
   try { ws.close(); } catch (e) {}
   try { edgeProc.kill(); } catch (e) {}
