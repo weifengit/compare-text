@@ -23,6 +23,9 @@ var DEMO = path.join(__dirname, '..', '演示文件');
 var DEMO_DOC = path.join(DEMO, '01-文档对比');
 var DEMO_XLSX = path.join(DEMO, '03-表格对比');
 var DEMO_SCAN = path.join(DEMO, '05-扫描件对比');
+// V1.4 新增两类演示目录（由 gen-demo.js 产出）
+var DEMO_WEB = path.join(DEMO, '07-网页对比');
+var DEMO_MD = path.join(DEMO, '08-Markdown对比');
 var DEMO_TXT = path.join(DEMO);
 var HTTP_PORT = 4610 + (process.pid % 200);
 var DBG_PORT = 9710 + (process.pid % 200);
@@ -237,6 +240,80 @@ async function pickFile(side, name) {
     'return "not-found";})()');
   if (r !== 'ok') console.log('  !! 文件 ' + name + ' → ' + r);
 }
+/** 取某侧文件框内部的输入框（组合框把真正的 <input> 嵌在 .cb 里） */
+function inputSel(side) {
+  return side === 'L' ? 'fileSelL' : 'fileSelR';
+}
+
+/** 向文件框逐字输入（走 input 事件，等价于用户用键盘敲），供网址提交与胶囊分词复用 */
+async function typeIntoCombo(side, text) {
+  var r = await evaluate('(function(){var h=document.getElementById(' + JSON.stringify(inputSel(side)) + ');' +
+    'if(!h)return "no-host";var i=h.querySelector(".cb-input");if(!i)return "no-input";' +
+    'i.focus();i.value=' + JSON.stringify(text) + ';' +
+    'i.dispatchEvent(new Event("input",{bubbles:true}));return "ok";})()');
+  if (r !== 'ok') console.log('  !! 输入文件框 → ' + r);
+  await wait(600);
+}
+
+/** 在文件框里按回车：命中选项则选中，否则把输入原文当网址 / 快照路径提交 */
+async function pressEnterInCombo(side) {
+  await evaluate('(function(){var h=document.getElementById(' + JSON.stringify(inputSel(side)) + ');' +
+    'var i=h&&h.querySelector(".cb-input");if(!i)return "no-input";' +
+    'i.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",bubbles:true,cancelable:true}));' +
+    'return "ok";})()');
+}
+
+/** 敲入一个关键词后按空格，把它固化成胶囊（多个词依次调用） */
+async function commitChipWord(side, word) {
+  await typeIntoCombo(side, word);
+  await evaluate('(function(){var h=document.getElementById(' + JSON.stringify(inputSel(side)) + ');' +
+    'var i=h&&h.querySelector(".cb-input");if(!i)return "no-input";' +
+    'i.dispatchEvent(new KeyboardEvent("keydown",{key:" ",code:"Space",bubbles:true,cancelable:true}));' +
+    'return "ok";})()');
+  await wait(500);
+}
+
+/** 在页面内取本地文件字节（经 /api/file，与用户选文件同一通道），包成 File 供拖拽夹具用 */
+function pageFile(absPath, name, mime) {
+  return '(function(){return fetch("/api/file?path="+encodeURIComponent(' + JSON.stringify(absPath) + '))' +
+    '.then(function(r){return r.arrayBuffer();}).then(function(b){' +
+    'return new File([b],' + JSON.stringify(name) + ',{type:' + JSON.stringify(mime) + '});});})()';
+}
+
+/** 把一批本地文件拖进界面：先 dragenter/dragover 让遮罩亮起来，再按需 drop */
+async function dragFiles(absPaths, frac, doDrop) {
+  var files = [];
+  for (var i = 0; i < absPaths.length; i++) {
+    var p = absPaths[i];
+    var handle = await cdpSend('Runtime.evaluate', {
+      expression: pageFile(p, path.basename(p), 'application/octet-stream'),
+      awaitPromise: true, returnByValue: false
+    }, 30000);
+    files.push(handle.result.objectId);
+  }
+  // 把取到的 File 装进一个真实 DataTransfer，挂到 window 上备用
+  await evaluate('(function(){window.__dt=new DataTransfer();return "ok";})()');
+  for (var k = 0; k < files.length; k++) {
+    await cdpSend('Runtime.callFunctionOn', {
+      objectId: files[k],
+      functionDeclaration: 'function(){window.__dt.items.add(this);return 1;}' ,
+      returnByValue: true
+    }, 20000);
+  }
+  var drive = '(function(frac){var r=document.getElementById("layout").getBoundingClientRect();' +
+    'var p={x:Math.round(r.left+r.width*frac),y:Math.round(r.top+60)};' +
+    '["dragenter","dragover"].forEach(function(t){window.dispatchEvent(new DragEvent(t,' +
+    '{dataTransfer:window.__dt,clientX:p.x,clientY:p.y,bubbles:true,cancelable:true}));});' +
+    'return JSON.stringify(p);})(' + JSON.stringify(frac) + ')';
+  await evaluate(drive);
+  if (doDrop) {
+    await evaluate('(function(frac){var r=document.getElementById("layout").getBoundingClientRect();' +
+      'var p={x:Math.round(r.left+r.width*frac),y:Math.round(r.top+60)};' +
+      'window.dispatchEvent(new DragEvent("drop",{dataTransfer:window.__dt,' +
+      'clientX:p.x,clientY:p.y,bubbles:true,cancelable:true}));return "ok";})(' + JSON.stringify(frac) + ')');
+  }
+}
+
 
 // ---------------------------------------------------------------- 启动 / 关闭
 async function boot() {
