@@ -178,7 +178,10 @@ var DEMO_R = [
 // ---------------------------------------------------------------- 页面 / UI 驱动
 /** 重载页面并等就绪（清掉 localStorage，避免上一次场景的历史与标签串场） */
 async function freshPage() {
-  await evaluate('(function(){try{localStorage.clear();}catch(e){}location.reload();return "1";})()');
+  // 场景 13 会把标签页导航到报告 HTML：单靠 location.reload() 会停在报告页，
+  // 后续场景永远等不到应用全局，因此这里显式导航回首页（顺带完成 localStorage 清理后的重载）。
+  await evaluate('(function(){try{localStorage.clear();}catch(e){}return "1";})()');
+  await cdpSend('Page.navigate', { url: 'http://127.0.0.1:' + HTTP_PORT + '/' }, 20000);
   await wait(2200);
   await poll('(typeof Pipeline!=="undefined")&&(typeof FilterBar!=="undefined")&&!!document.querySelector(".CodeMirror")',
     function (v) { return v === true; }, 80, '重载就绪');

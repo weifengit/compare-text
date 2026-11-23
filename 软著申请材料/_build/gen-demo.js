@@ -20,6 +20,9 @@ var cp = require('child_process');
 var ROOT = path.join(__dirname, '..', '..');
 var DEMO = path.join(__dirname, '..', '演示文件', '01-文档对比');
 var SCAN = path.join(__dirname, '..', '演示文件', '05-扫描件对比');
+// V1.4 新增两类演示件：网页原稿对照（快照 HTML + 还原 docx）与 Markdown 两版
+var WEB = path.join(__dirname, '..', '演示文件', '07-网页对比');
+var MD = path.join(__dirname, '..', '演示文件', '08-Markdown对比');
 var TMP = path.join(os.tmpdir(), 'gen-demo-' + process.pid);
 var HTTP_PORT = 4810 + (process.pid % 200);
 var DBG_PORT = 9810 + (process.pid % 200);
