@@ -40,3 +40,5 @@ dist-dsh-offline/
 # 软著材料：手册插图由 _build/py/build_manual.py 从界面截图裁切生成
 软著申请材料/界面插图/
 软著申请材料/_build/py/__pycache__/
+# 软著 AI 声明的个人参考件（含他人登记信息，不入库）
+软著申请材料/AI相关声明-参考.docx
