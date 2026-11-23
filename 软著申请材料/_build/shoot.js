@@ -649,7 +649,76 @@ var SCENES = [
       await cdpSend('Emulation.clearDeviceMetricsOverride');
       await wait(600);
     }
-  }
+  },
+  {
+    id: '18', name: '18-网页对比与样式核对', desc: '快照 HTML 直接输进文件框 + 还原 docx，样式核对面板逐段列出版式偏差',
+    run: async function () {
+      var snap = path.join(DEMO_WEB, '广东中药材标准-网页原稿快照.html');
+      var docx = path.join(DEMO_WEB, '广东中药材标准-还原稿.docx');
+      if (!fs.existsSync(snap) || !fs.existsSync(docx)) { console.log('  !! 缺少网页对比演示件'); return; }
+      await freshPage();
+      await setSrc(DEMO_WEB);
+      // 左侧：把快照路径当网址一样输进「原始文件」框后回车（不弹任何子窗口）
+      await typeIntoCombo('L', snap);
+      await pressEnterInCombo('L');
+      await poll('(function(){return !!(typeof WebView!=="undefined"&&WebView.isLoaded&&WebView.isLoaded("L"));})()',
+        function (v) { return v === true; }, 120, '网页面板就绪');
+      // 右侧：选还原稿 docx；两侧一置齐就自动跑样式核对
+      await pickFile('R', '广东中药材标准-还原稿.docx');
+      await poll('(function(){var p=document.getElementById("stylePanel");' +
+        'return !!(p&&!p.hidden&&document.querySelectorAll("#styleBody tr.sp-row").length>0);})()',
+        function (v) { return v === true; }, 120, '样式核对面板出结果');
+      await wait(1200);
+      await shot(this.name, fullClip());
+      await shotOf('18b-样式核对差异明细', '#stylePanel');
+    }
+  },
+  {
+    id: '19', name: '19-文件框胶囊关键词', desc: '文件框空格分词：每个词固化成可删胶囊，多词同时命中才列入',
+    run: async function () {
+      await freshPage();
+      await setSrc(DEMO_DOC);
+      // 先敲「合同」再敲空格：固化胶囊；再敲「修订」：两个词同时命中的只剩一份
+      await commitChipWord('L', '合同');
+      await commitChipWord('L', '修订');
+      await wait(900);
+      await shot(this.name, fullClip());
+    }
+  },
+  {
+    id: '20', name: '20-拖拽文件对比', desc: '一次拖入两个文件：遮罩写明谁落原文、谁落修改后',
+    run: async function () {
+      var a = path.join(DEMO_DOC, '合同-草案.pdf');
+      var b = path.join(DEMO_DOC, '合同-修订.pdf');
+      if (!fs.existsSync(a) || !fs.existsSync(b)) { console.log('  !! 缺少拖拽演示件'); return; }
+      await freshPage();
+      await dragFiles([a, b], 0.3, false);
+      await wait(700);
+      // 遮罩只活在拖拽期间：先拍「松开即对比」的落点提示
+      await shot(this.name, fullClip());
+      await dragFiles([a, b], 0.3, true);
+      await poll('(function(){return !!(typeof PdfView!=="undefined"&&PdfView.isLoaded' +
+        '&&PdfView.isLoaded("L")&&PdfView.isLoaded("R"));})()',
+        function (v) { return v === true; }, 120, '两侧 PDF 落位');
+      await wait(1500);
+      await shot('20b-拖入后对比完成', fullClip());
+    }
+  },
+  {
+    id: '21', name: '21-Markdown渲染对比', desc: '两版 .md 并排：标题/列表/表格/代码块渲染后逐行标注差异',
+    run: async function () {
+      await freshPage();
+      await setSrc(DEMO_MD);
+      await pickFile('L', '发布说明-草案.md');
+      await wait(2000);
+      await pickFile('R', '发布说明-修订.md');
+      await poll('(function(){return !!(typeof MdView!=="undefined"&&MdView.isLoaded' +
+        '&&MdView.isLoaded("L")&&MdView.isLoaded("R"));})()',
+        function (v) { return v === true; }, 120, 'Markdown 面板就绪');
+      await wait(1500);
+      await shot(this.name, fullClip());
+    }
+  },
 ];
 
 // ---------------------------------------------------------------- 主流程

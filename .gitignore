@@ -36,3 +36,7 @@ docs/*初审
 dist-dsh-offline/
 # Windows 上 taskkill 等命令重定向产生的空文件
 /nul
+
+# 软著材料：手册插图由 _build/py/build_manual.py 从界面截图裁切生成
+软著申请材料/界面插图/
+软著申请材料/_build/py/__pycache__/
